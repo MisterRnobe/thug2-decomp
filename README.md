@@ -48,6 +48,25 @@ When the decompilation is complete, the game builds as a standalone program from
 copy's data files. The libraries (D3DX9, GameSpy, the C runtime) will be linked rather than decompiled, and the QB
 script interpreter is planned to be replaced by JavaScript (QuickJS) with the scripts decompiled to readable JS.
 
+## Portable native core in this fork
+
+This fork also contains a separate C++20 archive/resource layer, QB readers,
+symbol table, value evaluator and bounded QB executor under [`native/`](native/README.md).
+It builds independently of the x86 DLL and requires no game EXE, Windows APIs,
+inline assembly, Node tools or content-pipeline submodules for its unit tests:
+
+```sh
+cmake -S native -B work/native-build -DCMAKE_BUILD_TYPE=Release
+cmake --build work/native-build --config Release --parallel 2
+ctest --test-dir work/native-build -C Release --output-on-failure
+```
+
+This is not a standalone game port. Renderer, physics, engine hosts and scheduling
+are not connected to this core. Optional corpus/original-x86 checks use local,
+user-supplied game files; no fixtures, executables or generated reports are published.
+See [`native/RUNTIME.md`](native/RUNTIME.md) for the supported QB subset and
+[`native/NOTICE.md`](native/NOTICE.md) for provenance and licensing boundaries.
+
 ## What you need
 
 **Games** (your own copies; nothing from them is ever committed):

@@ -1,0 +1,42 @@
+The archive format, checksum conventions and PRE LZSS decoder behavior were
+derived from https://github.com/CanuckAussieKev/thug2-decomp at commit
+2d82ed2 (2026-10-28), notably
+src/game/file/pre.cpp and src/game/core/crc.cpp, and checked against the user's
+game data. Original decoder address: 0x005B7DF0; name CRC: 0x00401B90.
+
+Token QB layouts and checksums also use src/game/script/qb.cpp, load.cpp,
+parse.cpp and precompiled.h at that commit. The bounded inspector does not
+reuse game pointer layouts or execute the interpreter. Optional tests emulate
+original SkipToken (0x0046F690) and CalculateScriptChecksum (0x0046F960).
+
+Precompiled image traversal also follows script/precompiled.cpp. The actual
+serialized enum-field positions were verified from the supplied files rather
+than adopting PC runtime structs. Test copies alone adapt those enum fields
+for comparison with original PC RelocatePrecompiledSymbols (0x0046CA50); stored
+script decoding is checked with original Lzss::Decode (0x004014F0).
+
+Symbol-table alias lookup, permanent ownership and unchanged-script reuse are
+informed by script/struct.cpp and load.cpp. An optional synthetic-PC-table test
+checks FindSymbol (0x00478CC0) and LookUpSymbol (0x00478CF0). Portable ownership,
+atomic publication, bounded cycle detection and diagnostics are new code.
+
+Static value parsing and operation conventions additionally follow script/parse.cpp,
+eval.cpp and struct.cpp. The immutable model, bounded static evaluation and
+binary64 error-free transforms for 64-bit significand rounding are new portable
+code. Tests compare scalar operations with original Execute (0x0046D450), using
+synthetic components and no game allocations or callbacks.
+
+The bounded QB executor's control/parameter rules follow cscript_exec.cpp,
+cscript_core.cpp and cscript_wait.cpp. Its owning frames, host boundary, fuel and
+diagnostics are new code. Optional tests compare pre-initialized ExecuteRepeat
+(0x00472AB0) and ExecuteIf (0x00475050) with a test boolean condition stub; they
+do not execute the original engine or full interpreter.
+
+Upstream distinguishes reconstructed game code from its MIT-licensed original
+tooling. No MIT license is asserted here for reconstructed game routines. See
+../LICENSE and ../NOTICE.md for upstream's notices. Game assets
+and executable are not included in this module.
+
+The portable parser, CLI, bounds checks, explicit state and tests are new work
+for this project. No EXE addresses, Windows APIs, inline assembly, or original
+game memory are used at runtime.
