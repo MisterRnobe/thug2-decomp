@@ -74,9 +74,11 @@ struct Interpreter::Execution {
     Interpreter& vm;RunLimits limits;std::vector<Frame> stack;
     RunResult result{RunStatus::Finished,structure_value({}),0,{},false,{}, {},{}};
     bool persistent=false;
+    TaskId owner=0;
     std::optional<std::uint64_t> last_frame;
     FrameTick tick{};
-    explicit Execution(Interpreter& owner,RunLimits bounds):vm(owner),limits(bounds){}
+    explicit Execution(Interpreter& interpreter,RunLimits bounds,TaskId id):vm(interpreter),limits(bounds),owner(id){}
+    ~Execution(){vm.random_.forget(owner);}
     void charge(std::size_t n=1){
         if(n>limits.fuel-result.work)fault(EvalFailure::Limit,"Execution fuel exhausted");result.work+=n;
     }
@@ -226,6 +228,16 @@ struct Interpreter::Execution {
         switch(t.opcode){
         case 1:case 2:case 0x28:case 0x3d:frame.pc+=t.size;return;
         case 0x3c:switch_statement();return;
+        case 0x2f:case 0x37:case 0x40:case 0x41:{
+            auto count=word(f->doc.bytes(),frame.pc+1);
+            if(!count||count>65535)fault(EvalFailure::Syntax,"Random choice count must be 1..65535");
+            std::vector<std::uint16_t> weights;weights.reserve(count);
+            for(std::size_t i=0;i<count;++i){charge();weights.push_back(static_cast<std::uint16_t>(word(f->doc.bytes(),frame.pc+5+i*2,2)));}
+            auto choice=vm.random_.choose(t.opcode,f->name,frame.pc,weights,owner,[&](std::size_t n){charge(n);});
+            auto field=frame.pc+5+count*2+choice*4;
+            auto delta=std::bit_cast<std::int32_t>(word(f->doc.bytes(),field));
+            frame.pc=static_cast<std::size_t>(std::int64_t(field+4)+delta);return;}
+
         case 0x3e:case 0x3f:fault(EvalFailure::Syntax,"Case/default reached outside switch dispatch");
         case 0x24:finish();return;
         case 0x29:{auto end=statement_end(*f,frame.pc+1);auto returned=args(*f,frame.pc+1,end,frame.params);finish(std::move(returned));return;}
@@ -270,7 +282,8 @@ struct RunningGuard {
 RunResult Interpreter::run(std::uint32_t script,ValuePtr parameters,RunLimits limits){
     if(running_)return {RunStatus::Fault,structure_value({}),0,{},false,EvalFailure::Unsupported,"Reentrant execution is unsupported",{}};
     RunningGuard guard(running_);
-    Execution execution(*this,limits);
+    if(next_task_==0)throw std::length_error("Task IDs exhausted");
+    Execution execution(*this,limits,next_task_++);
     try{
         if(parameters&&parameters->type!=ValueType::Structure)fault(EvalFailure::Type,"Entry parameters must be a structure");
         execution.push(script,std::move(parameters));
@@ -284,7 +297,8 @@ RunResult Interpreter::run(std::uint32_t script,ValuePtr parameters,RunLimits li
 TaskId Interpreter::start(std::uint32_t script,ValuePtr parameters,RunLimits limits){
     RunningGuard guard(running_);
     if(tasks_.size()>=256||next_task_==0)throw std::length_error("Task capacity exhausted (cancel completed tasks)");
-    auto execution=std::make_unique<Execution>(*this,limits);execution->persistent=true;
+    auto id=next_task_++;
+    auto execution=std::make_unique<Execution>(*this,limits,id);execution->persistent=true;
     execution->result.status=RunStatus::Ready;
     try{
         if(parameters&&parameters->type!=ValueType::Structure)fault(EvalFailure::Type,"Entry parameters must be a structure");
@@ -293,7 +307,7 @@ TaskId Interpreter::start(std::uint32_t script,ValuePtr parameters,RunLimits lim
     }catch(const EvalError& e){execution->result.status=e.kind==EvalFailure::Limit?RunStatus::Limit:RunStatus::Fault;
         execution->result.failure=e.kind;execution->result.message=e.what();}
     catch(const std::exception& e){execution->result.status=RunStatus::Fault;execution->result.message=e.what();}
-    auto id=next_task_++;tasks_.emplace(id,std::move(execution));return id;
+    tasks_.emplace(id,std::move(execution));return id;
 }
 void Interpreter::accept_tick(FrameTick tick){
     if(!std::isfinite(tick.seconds)||tick.seconds<0)throw std::invalid_argument("Invalid frame duration");
@@ -336,6 +350,9 @@ std::vector<std::pair<TaskId,RunResult>> Interpreter::update_all(FrameTick tick)
 RunResult Interpreter::inspect(TaskId task) const{return tasks_.at(task)->result;}
 bool Interpreter::cancel(TaskId task){
     if(running_)throw std::logic_error("Cannot cancel during execution");return tasks_.erase(task)!=0;
+}
+void Interpreter::seed_random(std::uint32_t seed){
+    if(running_)throw std::logic_error("Cannot seed during execution");random_.seed(seed);
 }
 void Interpreter::install_wait(){
     bind(name_crc("Wait"),[this](const HostCall& call){

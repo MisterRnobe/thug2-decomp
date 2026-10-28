@@ -39,6 +39,12 @@ and ComponentsEqual in struct.cpp. Optional tests execute the original switch
 scanner and equality, with controlled literal-parser and component-lifetime
 stubs, rather than running the original interpreter or game allocators.
 
+Portable random streams and statement table choices follow mth/random.cpp,
+script/parse.cpp (ResolveRandomJumps) and script/qb.cpp (CStoredRandom::Shuffle).
+Native owner/site keys, storage and validation are new. Optional tests compare
+original RNG, selection and shuffle code with controlled stored-record lookup
+and allocation; they do not run the engine or inline-value parser.
+
 Upstream distinguishes reconstructed game code from its MIT-licensed original
 tooling. No MIT license is asserted here for reconstructed game routines. See
 ../LICENSE and ../NOTICE.md for upstream's notices. Game assets

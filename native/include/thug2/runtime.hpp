@@ -1,6 +1,7 @@
 #pragma once
 #include "thug2/values.hpp"
 #include "thug2/wait.hpp"
+#include "thug2/random.hpp"
 #include <functional>
 #include <map>
 
@@ -37,6 +38,7 @@ public:
     Interpreter& operator=(const Interpreter&)=delete;
     void bind(std::uint32_t name, HostFunction function);
     void install_wait();
+    void seed_random(std::uint32_t seed);
     RunResult run(std::uint32_t script, ValuePtr parameters = {}, RunLimits limits = {});
     TaskId start(std::uint32_t script, ValuePtr parameters = {}, RunLimits limits = {});
     RunResult update(TaskId task, FrameTick tick);
@@ -52,6 +54,7 @@ private:
     std::unordered_map<std::uint32_t,std::shared_ptr<const Function>> functions_;
     std::unordered_map<std::uint32_t,HostFunction> hosts_;
     bool running_=false;
+    RandomSelector random_;
     std::map<TaskId,std::unique_ptr<Execution>> tasks_;
     TaskId next_task_=1;
     std::optional<FrameTick> tick_;

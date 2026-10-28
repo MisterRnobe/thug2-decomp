@@ -36,13 +36,16 @@ and remains unchanged.
 - Compiled `switch/case/default/endswitch` selects the first component of the
   selector and case lines, supports grouped labels and skips nested switches
   while scanning untaken regions. See the switch details below.
+- Statement-level weighted random, second-stream random, no-repeat and
+  permuted branches use portable original RNG streams and bounded stored
+  histories. See [random jumps](RANDOM.md) for behavior and integration limits.
 - `begin/repeat` supports nested loops. Repeat arguments are read once, on its
   first visit. With no integer count the loop is unbounded; integer counts are
   decremented as uint32. Thus repeat 0 does not mean zero iterations: it wraps.
   `break` skips the innermost loop, including the repeat arguments.
 
 Loop stacks and waits are frame-local. Original cross-frame loop manipulation,
-interrupts, events, random jumps, object/member dispatch,
+interrupts, events, random jumps inside values, object/member dispatch,
 resolved function-pointer tokens and engine calls inside expressions are not
 implemented. Unsupported cases fault; they are not skipped as successful no-ops.
 Unlike the original's permissive missing-command behavior, an unbound command
@@ -95,7 +98,7 @@ trace and an error category/message. On faults the root parameters are retained
 if the root frame was initialized. Run state is reset even after exceptions.
 
 CLI: `thug2-run SCRIPT --load QB... [--prx ARCHIVE|--dir ROOT] [--int PARAM=VALUE]
-[--fuel N] [--trace N] [--frames N] [--fps N]`. Script and parameter identifiers accept names or
+[--fuel N] [--trace N] [--frames N] [--fps N] [--seed N]`. Script and parameter identifiers accept names or
 `0xCRC`; int arguments must fit int32. Files and sources keep their documented
 explicit orders. Exit codes: 0 finished, 1 fault/error, 2 limit, 3 still waiting at the frame cap. Output is a
 status, parameter preview and trace. `--frames` enables only Wait and drives
@@ -182,7 +185,7 @@ UndefinedBehaviorSanitizer runs pass.
 The no-host catalog audit attempts all 15,728 **script definitions** in the
 565-module inspection snapshot, in CRC order, with empty inputs and 500 fuel
 per entry. Caches are shared across entries. Results: **937 finished**, 10
-limited; faults: 13,959 missing commands, 144 type faults and 678 unsupported
+limited; faults: 14,008 missing commands, 144 type faults and 629 unsupported
 features. Aliases are not counted as separate entry definitions. Early-return
 or empty scripts can finish trivially. These results do not validate complete
 gameplay behavior or prove that the remaining scripts are broken.
@@ -204,7 +207,7 @@ Wait/resume validation adds zero/exact/paused/wrapping clocks, integer-to-float
 conversion, flag precedence and inclusions, nested call/loop continuations,
 shared per-frame gates, repeated-tick idempotence, cancellation/capacity,
 invalid clocks, nonfinite durations, reentrancy and lifetime fuel bounds. All
-9 CTest suites pass in Release and ASan/UBSan builds.
+10 CTest suites pass in Release and ASan/UBSan builds.
 
 ```sh
 work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
@@ -214,8 +217,8 @@ work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
 
 With only Wait registered, the same 15,728-entry catalog, empty parameters,
 500 lifetime fuel and at most four simulated 60 Hz updates per entry gives
-938 finished, 85 waiting, 10 limited; faults: 13,865 missing, 144 type,
-686 unsupported. Each entry gets a new task, then is canceled. The remaining
+938 finished, 85 waiting, 10 limited; faults: 13,915 missing, 144 type,
+636 unsupported. Each entry gets a new task, then is canceled. The remaining
 waiters are not failures, nor is a finished entry proof of complete gameplay.
 Release and ASan/UBSan catalog reports match exactly. The no-host baseline
 now gives 937 finished with the fault counts listed above.
@@ -278,3 +281,8 @@ these dispatch decisions, not the original argument parser, game allocator or
 full interpreter. The full Wait-only catalog reports match between Release
 and ASan/UBSan builds. Reports are `work/switch-oracle.json`, `switch-no-host.json`,
 `switch-wait.json` and `switch-wait-sanitize.json`.
+
+Statement random support is described in [RANDOM.md](RANDOM.md). One-shot runs
+also consume an internal execution ID for stored-random ownership, so public
+task IDs are monotonic but need not be consecutive. Seed and execution order
+are part of the random-enabled catalog audit conditions.

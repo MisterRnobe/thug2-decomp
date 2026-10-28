@@ -145,4 +145,15 @@ EXPORT int runtime_switch_destination(const std::uint8_t* body,std::size_t size)
     }catch(...){return -1;}
 }
 
+EXPORT void* random_selector_create(std::uint32_t seed){auto* p=new thug2::qb::RandomSelector;p->seed(seed);return p;}
+EXPORT void random_selector_destroy(void* p){delete static_cast<thug2::qb::RandomSelector*>(p);}
+EXPORT int random_selector_pick(void* p,unsigned opcode,const std::uint16_t* weights,std::size_t count){
+    try{return static_cast<int>(static_cast<thug2::qb::RandomSelector*>(p)->choose(static_cast<std::uint8_t>(opcode),1,0,{weights,count},1));}
+    catch(...){return -1;}
+}
+EXPORT void* random_stream_create(std::uint32_t seed){return new thug2::qb::RandomStreams(seed);}
+EXPORT void random_stream_destroy(void* p){delete static_cast<thug2::qb::RandomStreams*>(p);}
+EXPORT std::int32_t random_stream_draw(void* p,std::int32_t range,int second){return static_cast<thug2::qb::RandomStreams*>(p)->draw(range,second!=0);}
+EXPORT void random_stream_state(void* p,int second,std::uint32_t* out){const auto& s=static_cast<thug2::qb::RandomStreams*>(p)->state(second!=0);out[0]=s.add;out[1]=s.mul;out[2]=s.value;}
+
 }
