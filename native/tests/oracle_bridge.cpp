@@ -135,4 +135,14 @@ EXPORT int wait_advance(std::uint32_t* words,double seconds,std::uint32_t now,un
     }catch(...){return -1;}
 }
 
+EXPORT int runtime_switch_destination(const std::uint8_t* body,std::size_t size){
+    try{
+        thug2::Bytes file{0x23,0x16,1,0,0,0};file.insert(file.end(),body,body+size);file.push_back(0);
+        thug2::qb::SymbolTable table;table.load_bytes("switch-probe",std::move(file));thug2::qb::Interpreter vm(table);
+        auto r=vm.run(1);bool seen=false;
+        for(const auto& t:r.trace){if(seen)return static_cast<int>(t.offset);if(t.token==0x3c)seen=true;}
+        return -1;
+    }catch(...){return -1;}
+}
+
 }

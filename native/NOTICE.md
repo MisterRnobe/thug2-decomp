@@ -34,6 +34,10 @@ do not execute the original engine or full interpreter. Wait tests also compare
 Wait/WaitOnePerFrame/WaitTime/WaitRealTime setters and UpdateWait (0x00473050),
 with controlled clock-provider stubs. The task registry and explicit frame
 policy are new portable code, not the original gameplay scheduler.
+Switch dispatch also follows ExecuteSwitch/SkipToEndOfSwitch in cscript_exec.cpp
+and ComponentsEqual in struct.cpp. Optional tests execute the original switch
+scanner and equality, with controlled literal-parser and component-lifetime
+stubs, rather than running the original interpreter or game allocators.
 
 Upstream distinguishes reconstructed game code from its MIT-licensed original
 tooling. No MIT license is asserted here for reconstructed game routines. See

@@ -183,5 +183,5 @@ connect game-engine functions, objects or scheduling. No integration into the
 playable DLL has been performed by these steps.
 
 The [native QB executor](RUNTIME.md) supports opt-in Wait and explicit per-frame
-continuations with retained call/loop stacks. `thug2-run --frames N` drives a
+continuations with retained call/loop stacks, plus compiled switch/case dispatch. `thug2-run --frames N` drives a
 bounded simulated clock; game rendering, objects and events remain separate.

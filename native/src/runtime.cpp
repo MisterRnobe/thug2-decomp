@@ -158,6 +158,65 @@ struct Interpreter::Execution {
         if(stack.size()==1){result.parameters=joined(params,returned);stack.pop_back();}
         else{stack.pop_back();if(returned)stack.back().params=joined(stack.back().params,returned);}
     }
+    const Token& checked_token(const Function& f,std::size_t pc){
+        auto found=f.boundaries.find(pc);
+        if(found==f.boundaries.end()||pc<6||pc>=f.end)fault(EvalFailure::Syntax,"Switch PC outside function or not a token boundary");
+        charge();return f.doc.tokens()[found->second];
+    }
+    void skip_lines(const Function& f,std::size_t& pc){
+        for(;;){const auto& t=checked_token(f,pc);if(t.opcode!=1&&t.opcode!=2)return;pc+=t.size;}
+    }
+    void skip_switch(const Function& f,std::size_t& pc){
+        // Iterative: even deeply nested skipped switches cannot exhaust C++'s stack.
+        std::size_t depth=1;
+        while(depth){
+            const auto& t=checked_token(f,pc);
+            if(t.opcode==0x24||t.opcode==0)fault(EvalFailure::Syntax,"Switch has no endswitch");
+            if(t.opcode==0x3c)++depth;
+            if(t.opcode==0x3d)--depth;
+            pc+=t.size;
+        }
+    }
+    void switch_statement(){
+        auto& frame=stack.back();const auto& f=*frame.function;++frame.pc;
+        auto parameters=[&](){
+            auto end=statement_end(f,frame.pc);auto result=args(f,frame.pc,end,frame.params);frame.pc=end;
+            return result->members.empty()?ValuePtr{}:result->members.front().value;
+        };
+        auto value=parameters();
+        for(;;){
+            const auto& t=checked_token(f,frame.pc);
+            if(t.opcode==0x24||t.opcode==0)fault(EvalFailure::Syntax,"Switch has no endswitch");
+            if(t.opcode==0x3c){++frame.pc;skip_switch(f,frame.pc);continue;}
+            if(t.opcode==0x3d){++frame.pc;return;}
+            if(t.opcode==0x3f){
+                if(checked_token(f,frame.pc+1).opcode!=0x49)fault(EvalFailure::Syntax,"Default lacks compiled jump");
+                frame.pc+=4;return;
+            }
+            if(t.opcode!=0x3e){frame.pc+=t.size;continue;}
+            if(checked_token(f,frame.pc+1).opcode!=0x49)fault(EvalFailure::Syntax,"Case lacks compiled jump");
+            auto next=frame.pc+2+word(f.doc.bytes(),frame.pc+2,2);frame.pc+=4;
+            auto match=parameters();bool equal=false;
+            if(value&&match){
+                auto a=vm.values_.resolved(value);charge(vm.values_.last_work());
+                auto b=vm.values_.resolved(match);charge(vm.values_.last_work());
+                // The shared equality covers scalar, string and coordinate values.
+                // Mutable engine identity (arrays/structures/scripts) remains explicit.
+                if(a->type==ValueType::String||a->type==ValueType::LocalString)charge(a->text.size());
+                if(b->type==ValueType::String||b->type==ValueType::LocalString)charge(b->text.size());
+                equal=binary_value(7,std::move(a),std::move(b))->bits!=0;
+            }
+            if(!equal){frame.pc=next;continue;}
+            skip_lines(f,frame.pc);
+            while(checked_token(f,frame.pc).opcode==0x49){
+                const auto& following=checked_token(f,frame.pc+3);
+                if(following.opcode!=0x3e)break;
+                if(checked_token(f,frame.pc+4).opcode!=0x49)fault(EvalFailure::Syntax,"Grouped case lacks compiled jump");
+                frame.pc+=7;parameters();skip_lines(f,frame.pc);
+            }
+            return;
+        }
+    }
     void update(){
         auto& frame=stack.back();auto f=frame.function;
         auto found=f->boundaries.find(frame.pc);
@@ -165,7 +224,9 @@ struct Interpreter::Execution {
         auto t=f->doc.tokens()[found->second];charge();
         if(result.trace.size()<limits.trace)result.trace.push_back({f->name,t.offset-6,stack.size(),t.opcode});else result.trace_truncated=true;
         switch(t.opcode){
-        case 1:case 2:case 0x28:frame.pc+=t.size;return;
+        case 1:case 2:case 0x28:case 0x3d:frame.pc+=t.size;return;
+        case 0x3c:switch_statement();return;
+        case 0x3e:case 0x3f:fault(EvalFailure::Syntax,"Case/default reached outside switch dispatch");
         case 0x24:finish();return;
         case 0x29:{auto end=statement_end(*f,frame.pc+1);auto returned=args(*f,frame.pc+1,end,frame.params);finish(std::move(returned));return;}
         case 0x47:{auto target=frame.pc+1+word(f->doc.bytes(),frame.pc+1,2);frame.pc+=3;

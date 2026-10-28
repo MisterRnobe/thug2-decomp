@@ -33,13 +33,16 @@ and remains unchanged.
   are explicitly rejected because the legacy cross-frame behavior is not
   modeled. Expression statements test the raw result word (as ExecuteCommand
   does), rather than the arithmetic evaluator's integer/float GetBool rule.
+- Compiled `switch/case/default/endswitch` selects the first component of the
+  selector and case lines, supports grouped labels and skips nested switches
+  while scanning untaken regions. See the switch details below.
 - `begin/repeat` supports nested loops. Repeat arguments are read once, on its
   first visit. With no integer count the loop is unbounded; integer counts are
   decremented as uint32. Thus repeat 0 does not mean zero iterations: it wraps.
   `break` skips the innermost loop, including the repeat arguments.
 
 Loop stacks and waits are frame-local. Original cross-frame loop manipulation,
-interrupts, events, switch/case, random jumps, object/member dispatch,
+interrupts, events, random jumps, object/member dispatch,
 resolved function-pointer tokens and engine calls inside expressions are not
 implemented. Unsupported cases fault; they are not skipped as successful no-ops.
 Unlike the original's permissive missing-command behavior, an unbound command
@@ -178,8 +181,8 @@ UndefinedBehaviorSanitizer runs pass.
 
 The no-host catalog audit attempts all 15,728 **script definitions** in the
 565-module inspection snapshot, in CRC order, with empty inputs and 500 fuel
-per entry. Caches are shared across entries. Results: **907 finished**, 10
-limited; faults: 13,890 missing commands, 144 type faults and 777 unsupported
+per entry. Caches are shared across entries. Results: **937 finished**, 10
+limited; faults: 13,959 missing commands, 144 type faults and 678 unsupported
 features. Aliases are not counted as separate entry definitions. Early-return
 or empty scripts can finish trivially. These results do not validate complete
 gameplay behavior or prove that the remaining scripts are broken.
@@ -201,7 +204,7 @@ Wait/resume validation adds zero/exact/paused/wrapping clocks, integer-to-float
 conversion, flag precedence and inclusions, nested call/loop continuations,
 shared per-frame gates, repeated-tick idempotence, cancellation/capacity,
 invalid clocks, nonfinite durations, reentrancy and lifetime fuel bounds. All
-8 CTest suites pass in Release and ASan/UBSan builds.
+9 CTest suites pass in Release and ASan/UBSan builds.
 
 ```sh
 work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
@@ -211,14 +214,67 @@ work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
 
 With only Wait registered, the same 15,728-entry catalog, empty parameters,
 500 lifetime fuel and at most four simulated 60 Hz updates per entry gives
-908 finished, 85 waiting, 10 limited; faults: 13,796 missing, 144 type,
-785 unsupported. Each entry gets a new task, then is canceled. The remaining
+938 finished, 85 waiting, 10 limited; faults: 13,865 missing, 144 type,
+686 unsupported. Each entry gets a new task, then is canceled. The remaining
 waiters are not failures, nor is a finished entry proof of complete gameplay.
 Release and ASan/UBSan catalog reports match exactly. The no-host baseline
-remains 907 finished with its previous fault counts.
+now gives 937 finished with the fault counts listed above.
 
 The wait oracle checks 444 original setter cases and 2,442 update decisions
 (**2,886 checks, zero mismatches**), including unsigned wrap and timer
 rounding. Only frame-duration and game-clock providers are stubbed. It does
 not validate `CFunc_Wait` argument parsing, clock providers or the original
 scheduler. No original file is patched; emulation memory alone is modified.
+
+## Switch dispatch
+
+A switch and each case parse their argument line using the current script's
+parameters. Comparison uses the first resulting component, whether named or
+unnamed; it does not specifically look for name 0. Empty selectors/cases never
+match. Global names resolve against the interpreter snapshot. Integer/float
+comparison preserves exact int32 values (16777217 differs from float 16777216),
+NaNs do not match, and signed zeroes match. Strings and local strings compare
+contents within their own types; pairs/vectors compare coordinates. Mutable
+array/structure/script identity comparisons remain explicitly unsupported.
+
+A case is `3e 49 <uint16 next> arguments`, with the next address relative to
+its two-byte offset field. A failed comparison scans from that target; a
+successful comparison skips newlines and any immediately grouped labels
+(`49 <end> 3e 49 <next> arguments`) before entering the common body. Grouped
+labels still parse their arguments even after an earlier label matched.
+Default skips its `3f 49 <offset>` header and enters the body. Case-body exits
+use the existing `49` jump; `3d` endswitch advances normally. Switch dispatch
+does not add a runtime stack, so ordinary calls, loops, returns and waits can
+execute in a selected body.
+
+Nested switches encountered during a scan are skipped with an iterative
+balanced-token scan, including 2,000-deep test input. All scan/lookahead/value
+work consumes lifetime fuel; string comparisons charge their text lengths.
+All PCs and jump targets must stay on function token boundaries. Missing
+endswitch, malformed case/default headers and directly dispatched case/default
+labels fault rather than reproducing the original interpreter's infinite loops.
+
+Fixtures cover matching/default/no-default branches, grouped labels, nested
+skipped and executed switches, first-component selection, global/missing names,
+empty arguments, scalar/string/coordinate equality, unsupported identity,
+QB calls, waits, malformed inputs and scan fuel. Release and ASan/UBSan tests
+pass. The no-host catalog improves from 907 to 937 finished entries, and the
+Wait-only four-frame audit from 908 to 938; this does not imply full gameplay
+support for those entries. More entries now reach missing engine commands.
+
+```sh
+/path/to/project/.venv/bin/python tools/verify_native_switch.py \
+  --exe /path/to/Game/THUG2PM.exe --report work/switch-oracle.json
+```
+
+The optional x86 oracle compares **652 switch destinations with zero
+mismatches**, including numeric/name/string/coordinate pairs, grouped labels,
+empty/default-free selections and nested scans. Original ExecuteSwitch
+(0x00473c60), ComponentsEqual (0x004791a0), SkipToken, SkipEndOfLines and
+SkipToEndOfSwitch execute. Literal argument parsing and component
+allocation/copy/cleanup use controlled stubs (including PC coordinate-object
+layout). The native side parses and executes the same QB bodies. This verifies
+these dispatch decisions, not the original argument parser, game allocator or
+full interpreter. The full Wait-only catalog reports match between Release
+and ASan/UBSan builds. Reports are `work/switch-oracle.json`, `switch-no-host.json`,
+`switch-wait.json` and `switch-wait-sanitize.json`.
