@@ -189,3 +189,8 @@ bounded simulated clock; game rendering, objects and events remain separate.
 [Random statement jumps](RANDOM.md) now use the two original RNG streams,
 weighted choices and bounded no-repeat/permutation histories; `--seed N`
 makes fresh executions reproducible. Inline random values remain future work.
+
+Hosted CI tests Linux x64, Windows x64 and macOS Intel (`macos-15-intel`). The
+macOS label is explicit because ARM hosted runners failed to acquire capacity
+on 2026-10-28; local macOS ARM Release and ASan/UBSan checks also pass. Runner
+labels: https://docs.github.com/en/actions/reference/runners/github-hosted-runners
