@@ -1,6 +1,7 @@
 #pragma once
 #include "thug2/symbols.hpp"
 #include <array>
+#include <functional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -38,6 +39,8 @@ std::string format_value(ValuePtr value, std::size_t max_items = 100);
 
 struct EvalLimits { std::size_t depth=128, nodes=250000, steps=1000000; };
 struct ParsedValue { ValuePtr value; std::size_t next, work; };
+// Runtime-only transfer resolver. Static global materialization never uses it.
+using ValueFlow = std::function<std::size_t(std::size_t)>;
 // A fixed snapshot of definitions. Reconstruct after changing the symbol table.
 // Lazy materialization uses the final snapshot, not original load-time evaluation.
 class ValueEvaluator {
@@ -45,8 +48,11 @@ public:
     explicit ValueEvaluator(const SymbolTable& table, EvalLimits limits = {});
     ValuePtr global(std::uint32_t name);
     ValuePtr member(ValuePtr structure, std::uint32_t name);
-    ParsedValue read(const Document& doc, std::size_t begin, std::size_t end, ValuePtr params = {});
+    ParsedValue read(const Document& doc, std::size_t begin, std::size_t end, ValuePtr params = {}, ValueFlow flow = {});
     ParsedValue arguments(const Document& doc, std::size_t begin, std::size_t end, ValuePtr params = {});
+    // Unlike static arguments(), stop at a top-level EOL/endscript/EOF/close-paren.
+    ParsedValue runtime_arguments(const Document& doc, std::size_t begin, std::size_t end,
+                                  ValuePtr params = {}, ValueFlow flow = {});
     ValuePtr resolved(ValuePtr value);
     std::size_t last_work() const { return steps_; }
 private:

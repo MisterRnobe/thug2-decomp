@@ -1,24 +1,13 @@
-#include "switch_fixture.hpp"
+#include "random_fixture.hpp"
 #include <algorithm>
 #include <iostream>
 #include <set>
 
 namespace {
-using namespace switch_fixture;
+using namespace random_fixture;
 void check(bool ok,const char* why){if(!ok)throw std::runtime_error(why);}
 template<class F> void rejects(F fn,const char* why){bool caught=false;try{fn();}catch(const EvalError&){caught=true;}check(caught,why);}
-Bytes random_block(std::uint8_t opcode,std::vector<std::uint16_t> weights,const std::vector<Bytes>& branches){
-    Bytes b{opcode};word(b,weights.size());for(auto w:weights){b.push_back(w&255);b.push_back(w>>8);}
-    auto offsets=b.size();for(std::size_t i=0;i<weights.size();++i)word(b,0);
-    std::vector<std::size_t> ends;
-    for(std::size_t i=0;i<branches.size();++i){
-        auto field=offsets+4*i;auto delta=b.size()-(field+4);for(unsigned j=0;j<4;++j)b[field+j]=delta>>(8*j);
-        append(b,branches[i]);b.push_back(0x2e);ends.push_back(b.size());word(b,0);
-    }
-    b.push_back(1);auto end=b.size()-1;
-    for(auto field:ends){auto delta=end-(field+4);for(unsigned j=0;j<4;++j)b[field+j]=delta>>(8*j);}
-    return b;
-}
+
 }
 int main(){try{
     RandomStreams a(123),b(123);for(int i=0;i<100;++i)check(a.draw(100)==b.draw(100),"Seed reproduces first stream");

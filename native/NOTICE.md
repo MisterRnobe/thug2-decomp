@@ -43,7 +43,12 @@ Portable random streams and statement table choices follow mth/random.cpp,
 script/parse.cpp (ResolveRandomJumps) and script/qb.cpp (CStoredRandom::Shuffle).
 Native owner/site keys, storage and validation are new. Optional tests compare
 original RNG, selection and shuffle code with controlled stored-record lookup
-and allocation; they do not run the engine or inline-value parser.
+and allocation; they do not run the engine. Inline-value flow additionally
+follows ParseArguments/ParseStructure/ParseExpression control points. An
+optional test runs original ParseArguments and random transfers with a
+controlled scalar AddParameter stub, comparing results and continuation state.
+The explicit runtime value callback and immutable parser state are new code;
+array control flow is rejected until its original two-pass behavior is modeled.
 
 Upstream distinguishes reconstructed game code from its MIT-licensed original
 tooling. No MIT license is asserted here for reconstructed game routines. See

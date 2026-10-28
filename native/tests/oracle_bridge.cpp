@@ -4,6 +4,7 @@
 #include "thug2/precompiled.hpp"
 #include "thug2/values.hpp"
 #include "thug2/runtime.hpp"
+#include "random_fixture.hpp"
 #include <algorithm>
 #include <bit>
 #include <limits>
@@ -155,5 +156,22 @@ EXPORT void* random_stream_create(std::uint32_t seed){return new thug2::qb::Rand
 EXPORT void random_stream_destroy(void* p){delete static_cast<thug2::qb::RandomStreams*>(p);}
 EXPORT std::int32_t random_stream_draw(void* p,std::int32_t range,int second){return static_cast<thug2::qb::RandomStreams*>(p)->draw(range,second!=0);}
 EXPORT void random_stream_state(void* p,int second,std::uint32_t* out){const auto& s=static_cast<thug2::qb::RandomStreams*>(p)->state(second!=0);out[0]=s.add;out[1]=s.mul;out[2]=s.value;}
+
+EXPORT int runtime_inline_arguments(const std::uint8_t* body,std::size_t size,std::uint32_t seed,std::uint32_t* out,std::size_t capacity){
+    try{
+        using namespace random_fixture;
+        Bytes file{0x23,0x16,1,0,0,0,1,0x16,100,0,0,0};file.insert(file.end(),body,body+size);
+        for(unsigned i=0;i<8;++i){append(file,name(101));append(file,random_block(i%2?0x37:0x2f,{1,1},{integer(11),integer(22)}));}
+        file.insert(file.end(),{0x24,0});SymbolTable symbols;symbols.load_bytes("inline-probe",std::move(file));Interpreter vm(symbols);vm.seed_random(seed);
+        std::vector<Member> first;std::vector<std::uint32_t> probes;
+        vm.bind(100,[&](const HostCall& c){first=c.arguments->members;return HostResult{};});
+        vm.bind(101,[&](const HostCall& c){probes.push_back(c.arguments->members.at(0).value->bits);return HostResult{};});
+        auto r=vm.run(1);if(r.status!=RunStatus::Finished||r.trace.size()<3||probes.size()!=8)return -1;
+        auto needed=2+first.size()*3+probes.size();if(capacity<needed)return -1;
+        out[0]=static_cast<std::uint32_t>(r.trace[2].offset-6);out[1]=static_cast<std::uint32_t>(first.size());std::size_t n=2;
+        for(const auto& m:first){out[n++]=m.name;out[n++]=static_cast<unsigned>(m.value->type);out[n++]=m.value->bits;}
+        for(auto value:probes)out[n++]=value;return static_cast<int>(n);
+    }catch(...){return -1;}
+}
 
 }

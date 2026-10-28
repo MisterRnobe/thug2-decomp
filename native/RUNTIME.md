@@ -36,8 +36,8 @@ and remains unchanged.
 - Compiled `switch/case/default/endswitch` selects the first component of the
   selector and case lines, supports grouped labels and skips nested switches
   while scanning untaken regions. See the switch details below.
-- Statement-level weighted random, second-stream random, no-repeat and
-  permuted branches use portable original RNG streams and bounded stored
+- Weighted random, second-stream random, no-repeat and
+  permuted branches in statements and runtime values use portable original RNG streams and bounded stored
   histories. See [random jumps](RANDOM.md) for behavior and integration limits.
 - `begin/repeat` supports nested loops. Repeat arguments are read once, on its
   first visit. With no integer count the loop is unbounded; integer counts are
@@ -45,7 +45,7 @@ and remains unchanged.
   `break` skips the innermost loop, including the repeat arguments.
 
 Loop stacks and waits are frame-local. Original cross-frame loop manipulation,
-interrupts, events, random jumps inside values, object/member dispatch,
+interrupts, events, control flow in array literals, object/member dispatch,
 resolved function-pointer tokens and engine calls inside expressions are not
 implemented. Unsupported cases fault; they are not skipped as successful no-ops.
 Unlike the original's permissive missing-command behavior, an unbound command
@@ -88,7 +88,7 @@ per frame; 100,000 compiled tokens; 4 MiB code bytes per function; 256 trace
 entries. Token counts are checked before building token metadata. Value parsing
 has its separate `EvalLimits`. Parameter merges also cap member counts.
 
-Fuel includes dispatched tokens, statement-boundary scans and charged value
+Fuel includes dispatched tokens, control-flow scans and charged value
 work. It is not the original instruction count or a wall-clock timer; warmed
 compiled/value caches can use less work. Traces keep a bounded prefix and mark
 truncation. Their offsets are relative to the script body; call depth is shown.
@@ -184,8 +184,8 @@ UndefinedBehaviorSanitizer runs pass.
 
 The no-host catalog audit attempts all 15,728 **script definitions** in the
 565-module inspection snapshot, in CRC order, with empty inputs and 500 fuel
-per entry. Caches are shared across entries. Results: **937 finished**, 10
-limited; faults: 14,008 missing commands, 144 type faults and 629 unsupported
+per entry. Caches are shared across entries. Results: **938 finished**, 16
+limited; faults: 14,194 missing commands, 144 type faults and 436 unsupported
 features. Aliases are not counted as separate entry definitions. Early-return
 or empty scripts can finish trivially. These results do not validate complete
 gameplay behavior or prove that the remaining scripts are broken.
@@ -207,7 +207,7 @@ Wait/resume validation adds zero/exact/paused/wrapping clocks, integer-to-float
 conversion, flag precedence and inclusions, nested call/loop continuations,
 shared per-frame gates, repeated-tick idempotence, cancellation/capacity,
 invalid clocks, nonfinite durations, reentrancy and lifetime fuel bounds. All
-10 CTest suites pass in Release and ASan/UBSan builds.
+11 CTest suites pass in Release and ASan/UBSan builds.
 
 ```sh
 work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
@@ -217,11 +217,11 @@ work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
 
 With only Wait registered, the same 15,728-entry catalog, empty parameters,
 500 lifetime fuel and at most four simulated 60 Hz updates per entry gives
-938 finished, 85 waiting, 10 limited; faults: 13,915 missing, 144 type,
-636 unsupported. Each entry gets a new task, then is canceled. The remaining
+939 finished, 96 waiting, 16 limited; faults: 14,091 missing, 144 type,
+442 unsupported. Each entry gets a new task, then is canceled. The remaining
 waiters are not failures, nor is a finished entry proof of complete gameplay.
 Release and ASan/UBSan catalog reports match exactly. The no-host baseline
-now gives 937 finished with the fault counts listed above.
+now gives 938 finished with the fault counts listed above.
 
 The wait oracle checks 444 original setter cases and 2,442 update decisions
 (**2,886 checks, zero mismatches**), including unsigned wrap and timer
@@ -282,7 +282,13 @@ full interpreter. The full Wait-only catalog reports match between Release
 and ASan/UBSan builds. Reports are `work/switch-oracle.json`, `switch-no-host.json`,
 `switch-wait.json` and `switch-wait-sanitize.json`.
 
-Statement random support is described in [RANDOM.md](RANDOM.md). One-shot runs
+Statement and inline-value random support is described in [RANDOM.md](RANDOM.md). One-shot runs
 also consume an internal execution ID for stored-random ownership, so public
 task IDs are monotonic but need not be consecutive. Seed and execution order
 are part of the random-enabled catalog audit conditions.
+
+Runtime values use an explicit transfer callback and a line-stopping argument
+reader. They follow only the selected path, return its actual PC, and retain
+original bare-name speculative lookup consumption. Static globals do not
+inherit runtime random context. Array control flow remains unsupported until
+its original two-pass behavior is implemented; see [RANDOM.md](RANDOM.md).

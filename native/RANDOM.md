@@ -1,7 +1,8 @@
 # Native QB random jumps
 
 `thug2/random.hpp` implements the original two RNG streams and bounded random
-choice histories. The interpreter handles table tokens **at statement dispatch**:
+choice histories. The interpreter handles table tokens at statement dispatch
+and while parsing runtime values:
 `2f` weighted Random, `37` the second stream, `40` RandomNoRepeat and `41`
 RandomPermute. Relative table offsets and jump targets use the existing checked
 QB document, without original addresses or pointer layouts.
@@ -70,20 +71,42 @@ operations cannot replenish fuel. Initialization faults remove the new record;
 RNG draws, existing-history mutations and evictions are not rolled back on a
 terminal fault. Construct a fresh interpreter for a clean reproduction.
 
-## Current integration boundary
+## Runtime value flow
 
-Random tables/jumps nested inside command arguments, assignments, defaults,
-expressions or switch argument lines still fault through the bounded value
-parser. This step does not implement inline-value control flow, RandomRange,
-random host commands, engine script spawning or cache-dependent owner reuse.
-The static value evaluator remains deterministic and does not consume RNG.
-Statement jumps can chain through random tables and ordinary jumps; every
-step costs fuel, including cycles. Selected branches can call QB, return,
-change parameters or yield at Wait using the existing runtime.
+The same transfer resolver now follows tables, long jumps and short jumps in
+command/callee arguments, assignments, expressions, script defaults, structure
+fields, return arguments, repeat counts and switch/case argument lines. It
+resolves the selected path as values are read, rather than scanning to the
+first physical EOL before choosing. Argument parsing returns the actual next
+PC, so a selected branch can end at a different physical newline or join a
+common tail. Tokens and code remain immutable.
+
+`ValueEvaluator::read` accepts an optional runtime `ValueFlow` callback;
+`runtime_arguments` stops at a top-level EOL/endscript/EOF/close-paren, unlike
+the static bounded `arguments` API. Structures and expressions allow internal
+newlines. The interpreter supplies a resolver that checks function boundaries
+and charges every transfer and RNG draw. Static globals and the default static
+value APIs never inherit this callback or consume random state.
+
+The original's bare-name lookahead is preserved: after a flag, checking for
+`=` can resolve a random table, then reset the read position and resolve that
+table again on the next argument. Named `name = random(...)` values instead
+choose once. Tests check both parameter values and subsequent stream probes;
+this is intentional original behavior rather than a cached speculative choice.
+Defaults also consume their choices before entry/call parameters override them.
+Repeat counts choose only on the first repeat; stored orders survive waits.
+
+Control flow inside array literals remains explicitly unsupported, including
+random inside a structure nested in an array. The original array parser makes
+a sizing/type pass and a population pass, with distinct RNG consumption; a
+single-pass choice would silently differ. RandomRange, random engine host
+commands, script spawning and cache-dependent owner reuse also remain future
+work. Selected statement branches can call QB, return, change parameters or
+yield at Wait through the existing runtime. Jump cycles consume lifetime fuel.
 
 ## Validation
 
-10 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
+11 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
 stream independence, seeds, zero-weight alternatives, no-repeat retries,
 permutation cycles/boundaries, task ownership and reuse, pool capacity,
 interrupted initialization, malformed tables, jump cycles, repeat loops and
@@ -104,13 +127,37 @@ seeds, both streams, signed/overflowing range scaling, weighted tables and
 allocators, ownership lookup, inline-value parsing or the full interpreter.
 
 With seed 0, empty inputs and 500 fuel per entry, the 15,728-entry no-host
-catalog gives 937 finished, 10 limited; faults: 14,008 missing, 144 type and
-629 unsupported. With only Wait registered and up to four 60 Hz updates per
-entry: 938 finished, 85 waiting, 10 limited; faults: 13,915 missing, 144 type,
-636 unsupported. Finished counts are unchanged by this step; more entries now
-reach a missing engine command. These are bounded catalog probes, not gameplay
+catalog gives 938 finished, 16 limited; faults: 14,194 missing, 144 type and
+436 unsupported. With only Wait registered and up to four 60 Hz updates per
+entry: 939 finished, 96 waiting, 16 limited; faults: 14,091 missing, 144 type,
+442 unsupported. More entries now reach a missing engine command or a genuine
+wait/fuel stop. The additional parser work changes bounded-audit fuel costs. These are bounded catalog probes, not gameplay
 validation. Release and ASan/UBSan Wait-only reports match exactly.
 
 Local reports: `work/random-oracle.json`, `random-no-host.json`,
 `random-wait.json`, `random-wait-sanitize.json`, `random-cli.json`. Game assets,
 original EXE and reports stay out of Git.
+
+Inline-flow fixtures additionally cover selected/common argument tails,
+assignments, expressions, defaults/overrides, QB calls/returns, named structure
+fields, selected bare flags, switch/case values, cached random repeat counts,
+physical-line boundaries, cycles, static API isolation, array rejection and
+permutation state across frames. All 11 suites pass under Release and ASan/UBSan;
+the full 15,728-entry Wait-only reports match.
+
+```sh
+/path/to/project/.venv/bin/python tools/verify_native_inline_random.py \
+  --exe /path/to/Game/THUG2PM.exe --report work/inline-random-oracle.json
+```
+
+The inline oracle checks **252 scenarios with zero mismatches**: original
+ParseArguments and ResolveRandomJumps/Rnd/Rnd2 execute; AddParameter is a
+controlled scalar literal-emission stub without engine allocators. It compares
+parameters, stop PC and eight subsequent stream probes, across six seeds,
+both streams, varied weights, named arguments and bare-name lookahead. It does
+not x86-validate expression, structure or array parsing. Previously checked
+26 if/repeat decisions and 652 switch destinations still match after parser
+integration. New reports: `work/inline-random-oracle.json`,
+`inline-random-no-host.json`, `inline-random-wait.json`,
+`inline-random-wait-sanitize.json`, `inline-runtime-oracle.json` and
+`inline-switch-oracle.json`.

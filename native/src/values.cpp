@@ -260,7 +260,8 @@ ValuePtr ValueEvaluator::apply(std::uint8_t op,ValuePtr a,ValuePtr b){
 
 class ValueEvaluator::Parser {
 public:
-    Parser(ValueEvaluator& e,const Document& doc,std::size_t begin,std::size_t end,ValuePtr params={}):e(e),doc(doc),b(doc.bytes()),p(begin),end(end),params(std::move(params)){
+    Parser(ValueEvaluator& e,const Document& doc,std::size_t begin,std::size_t end,ValuePtr params={},ValueFlow flow={},bool runtime=false):
+        e(e),doc(doc),b(doc.bytes()),p(begin),end(end),params(std::move(params)),flow(std::move(flow)),runtime(runtime),lines_allowed(!runtime){
         if(begin>end||end>b.size())fail(EvalFailure::Syntax,"Invalid value source range");
     }
     ValuePtr complete(){auto v=value();skip();if(p!=end)error(EvalFailure::Unsupported,"Unconsumed value tokens");return v;}
@@ -268,7 +269,7 @@ public:
     ParsedValue parameters(){
         std::vector<Member> members;
         while(p<end){
-            skip();if(p==end)break;auto initial=peek();std::uint32_t named=0;bool assigned=false;
+            skip();if(p==end||(runtime&&(b[p]==1||b[p]==2||b[p]==0x24||b[p]==0||b[p]==0x0f)))break;auto initial=peek();std::uint32_t named=0;bool assigned=false;
             if(initial==0x16){auto saved=p;auto n=word(b,p+1);p+=token().size;skip();
                 if(p<end&&b[p]==7){named=n;assigned=true;++p;}else p=saved;}
             skip();auto source=peek();auto v=value();
@@ -282,7 +283,14 @@ private:
     [[noreturn]] void error(EvalFailure k,const std::string& message){std::ostringstream s;s<<"QB value offset 0x"<<std::hex<<p<<": "<<message;fail(k,s.str());}
     std::uint8_t peek(){if(p>=end)error(EvalFailure::Syntax,"Unexpected end of value");return b[p];}
     Token token(){e.step();auto t=read_token(b,p);if(t.size>end-p)error(EvalFailure::Syntax,"Value exceeds its source range");return t;}
-    void skip(){while(p<end&&(b[p]==1||b[p]==2||b[p]==9)){p+=token().size;}}
+    struct FlagGuard {bool& flag;bool saved;FlagGuard(bool& flag,bool value):flag(flag),saved(flag){flag=value;}~FlagGuard(){flag=saved;}};
+    void resolve(){
+        if(!flow||p>=end)return;
+        if(in_array&&(b[p]==0x2e||b[p]==0x49||b[p]==0x2f||b[p]==0x37||b[p]==0x40||b[p]==0x41))
+            error(EvalFailure::Unsupported,"Control flow inside arrays requires original two-pass parsing");
+        e.step();p=flow(p);if(p>=end)error(EvalFailure::Syntax,"Value flow escaped its source");
+    }
+    void skip(){for(;;){resolve();if(p>=end)break;if(b[p]==9||(lines_allowed&&(b[p]==1||b[p]==2)))p+=token().size;else break;}}
     ValuePtr value(bool expression_name=false,bool member_name=false){
         Frame frame(e);skip();auto t=token();auto start=p;p+=t.size;
         switch(t.opcode){
@@ -292,7 +300,7 @@ private:
         case 0x1b:case 0x1c:return e.track(string_value(std::string(b.begin()+start+5,b.begin()+start+t.size-1),t.opcode==0x1c));
         case 0x1e:case 0x1f:{Value v;v.type=t.opcode==0x1e?ValueType::Vector:ValueType::Pair;
             for(std::size_t i=0;i<(t.size-1)/4;++i)v.coordinates[i]=word(b,start+1+i*4);return e.track(frozen(std::move(v)));}
-        case 3:{std::vector<Member> members;
+        case 3:{FlagGuard lines(lines_allowed,true);std::vector<Member> members;
             for(;;){skip();if(peek()==4){++p;break;}
                 if(peek()==3){auto sub=value();for(const auto& m:sub->members)add_member(members,m);continue;}
                 std::uint32_t name=0;bool assigned=false;
@@ -307,14 +315,14 @@ private:
                 else add_member(members,{name,std::move(v)});
             }
             return e.track(structure_value(std::move(members)));}
-        case 5:{std::vector<ValuePtr> elements;
+        case 5:{FlagGuard lines(lines_allowed,true);FlagGuard array(in_array,true);std::vector<ValuePtr> elements;
             if(expression_name)error(EvalFailure::Unsupported,"Array literal in expression context");
             for(;;){skip();auto t=peek();if(t==6){++p;break;}
                 if(t!=3&&t!=5&&t!=0x16&&t!=0x17&&t!=0x18&&t!=0x1a&&t!=0x1b&&t!=0x1c&&t!=0x1e&&t!=0x1f)
                     error(EvalFailure::Unsupported,"Runtime-dependent array element");
                 elements.push_back(value());}
             return e.track(array_value(std::move(elements)));}
-        case 0x0e:{auto v=expression(0);skip_expression();if(peek()!=0x0f)error(EvalFailure::Syntax,"Missing expression close");++p;return v;}
+        case 0x0e:{FlagGuard lines(lines_allowed,true);auto v=expression(0);skip_expression();if(peek()!=0x0f)error(EvalFailure::Syntax,"Missing expression close");++p;return v;}
         case 0x23:{auto i=std::find_if(doc.scripts().begin(),doc.scripts().end(),[&](const Script& s){return s.offset==start;});
             if(i==doc.scripts().end()||i->end_offset>end)error(EvalFailure::Syntax,"Invalid script value");
             Value v;v.type=ValueType::Script;v.code.assign(b.begin()+i->body_offset,b.begin()+i->end_offset);p=i->end_offset;return e.track(frozen(std::move(v)));}
@@ -331,7 +339,7 @@ private:
         default:p=start;error(EvalFailure::Unsupported,"Runtime-dependent or unsupported value token "+std::to_string(t.opcode));
         }
     }
-    void skip_expression(){while(p<end&&(b[p]==1||b[p]==2||b[p]==6)){p+=token().size;}}
+    void skip_expression(){for(;;){resolve();if(p<end&&(b[p]==1||b[p]==2||b[p]==6))p+=token().size;else break;}}
     ValuePtr expression(int minimum,bool member_name=false){
         Frame frame(e);skip_expression();auto left=value(true,member_name);
         for(;;){skip_expression();if(p>=end||b[p]==0x0f)break;
@@ -359,13 +367,16 @@ private:
             ++p;auto right=expression(precedence+1,op==8);left=e.apply(op,std::move(left),std::move(right));}
         return left;
     }
-    ValueEvaluator& e;const Document& doc;std::span<const std::uint8_t> b;std::size_t p,end;ValuePtr params;
+    ValueEvaluator& e;const Document& doc;std::span<const std::uint8_t> b;std::size_t p,end;ValuePtr params;ValueFlow flow;bool runtime=false,lines_allowed=true,in_array=false;
 };
-ParsedValue ValueEvaluator::read(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params){
-    if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params)).one();
+ParsedValue ValueEvaluator::read(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow){
+    bool runtime=bool(flow);if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),runtime).one();
 }
 ParsedValue ValueEvaluator::arguments(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params){
     if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params)).parameters();
+}
+ParsedValue ValueEvaluator::runtime_arguments(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow){
+    if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),true).parameters();
 }
 ValuePtr ValueEvaluator::resolved(ValuePtr value){
     if(!depth_){nodes_=0;steps_=0;}return resolve_name(std::move(value));

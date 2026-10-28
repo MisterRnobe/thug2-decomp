@@ -82,19 +82,26 @@ struct Interpreter::Execution {
     void charge(std::size_t n=1){
         if(n>limits.fuel-result.work)fault(EvalFailure::Limit,"Execution fuel exhausted");result.work+=n;
     }
-    std::size_t statement_end(const Function& f,std::size_t p){
-        auto found=f.boundaries.find(p);if(found==f.boundaries.end())fault(EvalFailure::Syntax,"PC is not a token boundary");
-        std::size_t depth=0;
-        for(std::size_t i=found->second;i<f.doc.tokens().size();++i){
-            const auto& t=f.doc.tokens()[i];charge();
-            if(!depth&&(t.opcode==1||t.opcode==2||t.opcode==0x24||t.opcode==0))return t.offset;
-            if(t.opcode==3||t.opcode==5||t.opcode==0x0e)++depth;
-            if(t.opcode==4||t.opcode==6||t.opcode==0x0f){if(!depth)fault(EvalFailure::Syntax,"Unmatched statement delimiter");--depth;}
+    std::size_t resolve(const Function& f,std::size_t pc){
+        for(;;){
+            auto found=f.boundaries.find(pc);
+            if(found==f.boundaries.end()||pc<6||pc>=f.end)fault(EvalFailure::Syntax,"Value PC outside function or not a token boundary");
+            auto t=f.doc.tokens()[found->second];
+            if(t.opcode==0x49){charge();pc+=1+word(f.doc.bytes(),pc+1,2);continue;}
+            if(t.opcode==0x2e){charge();auto delta=std::bit_cast<std::int32_t>(word(f.doc.bytes(),pc+1));pc=static_cast<std::size_t>(std::int64_t(pc+5)+delta);continue;}
+            if(t.opcode!=0x2f&&t.opcode!=0x37&&t.opcode!=0x40&&t.opcode!=0x41)return pc;
+            charge();auto count=word(f.doc.bytes(),pc+1);
+            if(!count||count>65535)fault(EvalFailure::Syntax,"Random choice count must be 1..65535");
+            std::vector<std::uint16_t> weights;weights.reserve(count);
+            for(std::size_t i=0;i<count;++i){charge();weights.push_back(static_cast<std::uint16_t>(word(f.doc.bytes(),pc+5+i*2,2)));}
+            auto choice=vm.random_.choose(t.opcode,f.name,pc,weights,owner,[&](std::size_t n){charge(n);});
+            auto field=pc+5+count*2+choice*4;auto delta=std::bit_cast<std::int32_t>(word(f.doc.bytes(),field));
+            pc=static_cast<std::size_t>(std::int64_t(field+4)+delta);
         }
-        fault(EvalFailure::Syntax,"Unterminated statement");
     }
-    ValuePtr args(const Function& f,std::size_t p,std::size_t end,ValuePtr params){
-        auto parsed=vm.values_.arguments(f.doc,p,end,std::move(params));charge(parsed.work);return parsed.value;
+    ValueFlow flow(const Function& f){return [this,&f](std::size_t p){return resolve(f,p);};}
+    ParsedValue args(const Function& f,std::size_t p,ValuePtr params){
+        auto parsed=vm.values_.runtime_arguments(f.doc,p,f.end,std::move(params),flow(f));charge(parsed.work);return parsed;
     }
     ValuePtr joined(ValuePtr a,ValuePtr b){
         if(a&&b&&(a->members.size()>250000||b->members.size()>250000-a->members.size()))fault(EvalFailure::Limit,"Parameter count limit");
@@ -104,14 +111,14 @@ struct Interpreter::Execution {
         if(stack.size()>=limits.calls)fault(EvalFailure::Limit,"Call depth limit");
         bool cached=vm.functions_.count(name)!=0;
         auto f=vm.compile(name,limits.code_tokens,limits.code_bytes);charge(cached?1:vm.values_.last_work());
-        auto end=statement_end(*f,6);auto defaults=args(*f,6,end,{});
-        stack.push_back({std::move(f),end,joined(defaults,std::move(params)),{}, {}});
+        auto defaults=args(*f,6,{});
+        stack.push_back({std::move(f),defaults.next,joined(defaults.value,std::move(params)),{}, {}});
     }
     std::uint32_t read_name(Frame& frame,std::size_t end){
         auto b=frame.function->doc.bytes();auto t=read_token(b,frame.pc);
         if(t.opcode==0x16){auto n=word(b,frame.pc+1);frame.pc+=5;return n;}
         if(t.opcode==0x2d||t.opcode==0x2c){
-            auto v=vm.values_.read(frame.function->doc,frame.pc,end,frame.params);charge(v.work);frame.pc=v.next;
+            auto v=vm.values_.read(frame.function->doc,frame.pc,end,frame.params,flow(*frame.function));charge(v.work);frame.pc=v.next;
             ValuePtr value=v.value;
             if(t.opcode==0x2c){value=vm.values_.member(frame.params,0);charge(vm.values_.last_work());}
             if(!value||value->type!=ValueType::Name)fault(EvalFailure::Type,"Dynamic command name is not a checksum");
@@ -121,22 +128,22 @@ struct Interpreter::Execution {
     }
     void command(std::optional<std::size_t> false_target={},bool negate=false){
         auto index=stack.size()-1;auto& frame=stack[index];auto f=frame.function;
-        auto end=statement_end(*f,frame.pc);auto b=f->doc.bytes();
+        frame.pc=resolve(*f,frame.pc);auto end=f->end;auto b=f->doc.bytes();
         auto branch=[&](bool value){if(false_target&&(value==negate))stack[index].pc=*false_target;};
         std::uint32_t name;
         if(b[frame.pc]==0x0e){
-            auto v=vm.values_.read(f->doc,frame.pc,end,frame.params);charge(v.work);frame.pc=v.next;
+            auto v=vm.values_.read(f->doc,frame.pc,end,frame.params,flow(*f));charge(v.work);frame.pc=v.next;
             if(v.value->type!=ValueType::Name){branch(condition(v.value));return;}
             name=v.value->bits;if(!name)name=read_name(frame,end);
         }else name=read_name(frame,end);
         if(frame.pc<end&&b[frame.pc]==7){
-            ++frame.pc;auto value=vm.values_.read(f->doc,frame.pc,end,frame.params);charge(value.work);
-            if(value.next!=end)fault(EvalFailure::Unsupported,"Extra tokens after assignment");
-            frame.pc=end;
+            ++frame.pc;auto value=vm.values_.read(f->doc,frame.pc,end,frame.params,flow(*f));charge(value.work);
+            frame.pc=resolve(*f,value.next);
+            auto next=b[frame.pc];if(next!=1&&next!=2&&next!=0x24&&next!=0)fault(EvalFailure::Unsupported,"Extra tokens after assignment");
             if(value.value->type!=ValueType::None)frame.params=joined(frame.params,structure_value({{name,value.value}}));
             branch(true);return;
         }
-        auto arguments=args(*f,frame.pc,end,frame.params);frame.pc=end;
+        auto parsed=args(*f,frame.pc,frame.params);auto arguments=parsed.value;frame.pc=parsed.next;
         if(auto host=vm.hosts_.find(name);host!=vm.hosts_.end()){
             auto function=host->second;auto response=function({name,f->name,arguments,frame.params,stack.size()});
             charge(response.work);
@@ -182,8 +189,8 @@ struct Interpreter::Execution {
     void switch_statement(){
         auto& frame=stack.back();const auto& f=*frame.function;++frame.pc;
         auto parameters=[&](){
-            auto end=statement_end(f,frame.pc);auto result=args(f,frame.pc,end,frame.params);frame.pc=end;
-            return result->members.empty()?ValuePtr{}:result->members.front().value;
+            auto result=args(f,frame.pc,frame.params);frame.pc=result.next;
+            return result.value->members.empty()?ValuePtr{}:result.value->members.front().value;
         };
         auto value=parameters();
         for(;;){
@@ -228,19 +235,10 @@ struct Interpreter::Execution {
         switch(t.opcode){
         case 1:case 2:case 0x28:case 0x3d:frame.pc+=t.size;return;
         case 0x3c:switch_statement();return;
-        case 0x2f:case 0x37:case 0x40:case 0x41:{
-            auto count=word(f->doc.bytes(),frame.pc+1);
-            if(!count||count>65535)fault(EvalFailure::Syntax,"Random choice count must be 1..65535");
-            std::vector<std::uint16_t> weights;weights.reserve(count);
-            for(std::size_t i=0;i<count;++i){charge();weights.push_back(static_cast<std::uint16_t>(word(f->doc.bytes(),frame.pc+5+i*2,2)));}
-            auto choice=vm.random_.choose(t.opcode,f->name,frame.pc,weights,owner,[&](std::size_t n){charge(n);});
-            auto field=frame.pc+5+count*2+choice*4;
-            auto delta=std::bit_cast<std::int32_t>(word(f->doc.bytes(),field));
-            frame.pc=static_cast<std::size_t>(std::int64_t(field+4)+delta);return;}
-
+        case 0x2f:case 0x37:case 0x40:case 0x41:frame.pc=resolve(*f,frame.pc);return;
         case 0x3e:case 0x3f:fault(EvalFailure::Syntax,"Case/default reached outside switch dispatch");
         case 0x24:finish();return;
-        case 0x29:{auto end=statement_end(*f,frame.pc+1);auto returned=args(*f,frame.pc+1,end,frame.params);finish(std::move(returned));return;}
+        case 0x29:{auto returned=args(*f,frame.pc+1,frame.params);finish(std::move(returned.value));return;}
         case 0x47:{auto target=frame.pc+1+word(f->doc.bytes(),frame.pc+1,2);frame.pc+=3;
             bool negate=frame.pc<f->end&&f->doc.bytes()[frame.pc]==0x39;if(negate)++frame.pc;command(target,negate);return;}
         case 0x48:case 0x49:frame.pc+=1+word(f->doc.bytes(),frame.pc+1,2);return;
@@ -253,8 +251,8 @@ struct Interpreter::Execution {
             if(frame.loops.empty()||frame.loops.back().repeat!=frame.pc)fault(EvalFailure::Syntax,"repeat without active loop");
             auto& loop=frame.loops.back();
             if(!loop.initialized){
-                loop.end=statement_end(*f,frame.pc+1);auto params=args(*f,frame.pc+1,loop.end,frame.params);
-                auto count=vm.values_.member(params,0);charge(vm.values_.last_work());
+                auto params=args(*f,frame.pc+1,frame.params);loop.end=params.next;
+                auto count=vm.values_.member(params.value,0);charge(vm.values_.last_work());
                 if(count){count=vm.values_.resolved(count);charge(vm.values_.last_work());}
                 if(count&&count->type==ValueType::Integer){loop.counted=true;loop.remaining=count->bits;}
                 loop.initialized=true;
@@ -262,7 +260,7 @@ struct Interpreter::Execution {
             if(!loop.counted||--loop.remaining!=0)frame.pc=loop.start;
             else{frame.pc=loop.end;frame.loops.pop_back();}return;}
         case 0x22:{if(frame.loops.empty())fault(EvalFailure::Syntax,"break outside loop");
-            frame.pc=statement_end(*f,frame.loops.back().repeat+1);frame.loops.pop_back();return;}
+            frame.pc=args(*f,frame.loops.back().repeat+1,{}).next;frame.loops.pop_back();return;}
         case 0x16:case 0x2c:case 0x2d:case 0x0e:command();return;
         default:fault(EvalFailure::Unsupported,"Unsupported runtime token "+std::to_string(t.opcode));
         }
