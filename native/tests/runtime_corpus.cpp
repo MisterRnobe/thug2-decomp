@@ -43,7 +43,7 @@ int main(int argc,char** argv){
     std::cout<<(with_data?(with_wait?"Data+Wait execution audit: ":"Data-only execution audit: "):(with_wait?"Wait-only execution audit: ":"No-host execution audit: "))<<scripts<<" entries, "<<finished<<" finished, "<<limit<<" limited, "<<waiting<<" waiting\n";
     for(const auto& [kind,n]:faults)std::cout<<kind<<": "<<n<<'\n';
     if(argc>=3){std::ofstream out(argv[2]);out<<"{\n  \"modules\": "<<files.size()<<",\n  \"entries\": "<<scripts
-        <<",\n  \"fuel_per_entry\": "<<limits.fuel<<",\n  \"registered_hosts\": "<<((with_wait?1:0)+(with_data?3:0))<<",\n  \"max_frames_per_entry\": "<<(with_wait?4:1)<<",\n  \"waiting\": "<<waiting<<",\n  \"finished\": "<<finished
+        <<",\n  \"fuel_per_entry\": "<<limits.fuel<<",\n  \"registered_hosts\": "<<((with_wait?1:0)+(with_data?data_host_count:0))<<",\n  \"max_frames_per_entry\": "<<(with_wait?4:1)<<",\n  \"waiting\": "<<waiting<<",\n  \"finished\": "<<finished
         <<",\n  \"limited\": "<<limit<<",\n  \"faults\": {";
         bool comma=false;for(const auto& [kind,n]:faults){if(comma)out<<',';comma=true;out<<'"'<<kind<<"\": "<<n;}
         out<<"},\n  \"completed_entries\": [";comma=false;for(auto name:completed){if(comma)out<<',';comma=true;out<<name;}

@@ -16,6 +16,7 @@ using HostFunction = std::function<HostResult(const HostCall&)>;
 struct RunLimits { std::size_t fuel=10000, calls=32, loops=32, code_tokens=100000, code_bytes=4194304, trace=256; };
 enum class RunStatus { Finished, Fault, Limit, Ready, Waiting };
 using TaskId = std::uint64_t;
+inline constexpr std::size_t data_host_count=6;
 std::string_view run_status_name(RunStatus status);
 struct TraceEntry { std::uint32_t script; std::size_t offset, depth; std::uint8_t token; };
 struct RunResult {
@@ -38,7 +39,7 @@ public:
     Interpreter& operator=(const Interpreter&)=delete;
     void bind(std::uint32_t name, HostFunction function);
     void install_wait();
-    void install_data_hosts(); // GetArraySize, StructureContains, GotParam; explicitly opt-in.
+    void install_data_hosts(); // Read-only data commands; explicitly opt-in.
     void seed_random(std::uint32_t seed);
     RunResult run(std::uint32_t script, ValuePtr parameters = {}, RunLimits limits = {});
     TaskId start(std::uint32_t script, ValuePtr parameters = {}, RunLimits limits = {});

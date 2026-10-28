@@ -199,7 +199,8 @@ on 2026-10-28; local macOS ARM Release and ASan/UBSan checks also pass. Runner
 labels: https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 
 [RandomRange](RANDOM.md) now preserves original integer/float selection and
-rounding. `--hosts data` connects GetArraySize, StructureContains and GotParam; the
+rounding. `--hosts data` connects GetArraySize, StructureContains, GotParam and
+Get2DArrayData/Get3DArrayData/GetNDArrayData; the
 [profile corpus](HOSTS.md) validates original game-script name lookups for all
 31 profiles and the 18-visible-profile count without the original EXE.
 

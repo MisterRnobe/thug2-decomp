@@ -1,4 +1,4 @@
-// Data-only script commands: array_cfuncs.cpp (GetArraySize) and
+// Data-only script commands: array_cfuncs.cpp (size and element access) and
 // script_cfuncs.cpp (StructureContains), script_util_cfuncs.cpp (GotParam),
 // upstream 2d82ed2. Native bounds new.
 #include "thug2/runtime.hpp"
@@ -65,9 +65,60 @@ struct Search {
         }
         return false;
     }
+    ValuePtr named_array(const HostCall& call,std::uint32_t name){
+        auto array=typed(call.parameters,name,ValueType::Array);if(!array)array=global(name);
+        if(!array||array->type!=ValueType::Array)throw EvalError(EvalFailure::Type,"Array data command requires a named array");
+        return array;
+    }
+    ValuePtr at(ValuePtr array,std::uint32_t index){
+        charge();if(!array||array->type!=ValueType::Array)throw EvalError(EvalFailure::Type,"Array data path requires an array");
+        if(index>=array->elements.size())throw EvalError(EvalFailure::Arithmetic,"Array data index out of bounds");
+        auto value=array->elements[index];if(!value||value->type!=array->element_type)throw EvalError(EvalFailure::Type,"Inconsistent array element type");return value;
+    }
+    ValuePtr child(ValuePtr array,std::uint32_t index){
+        auto value=at(array,index);if(value->type!=ValueType::Array)throw EvalError(EvalFailure::Type,"Array data path requires nested arrays");return value;
+    }
+    ValuePtr output(ValuePtr array,std::uint32_t index){
+        if(!array||array->type!=ValueType::Array)throw EvalError(EvalFailure::Type,"Array data leaf requires an array");
+        switch(array->element_type){
+        case ValueType::Integer:case ValueType::Float:case ValueType::String:case ValueType::LocalString:
+        case ValueType::Pair:case ValueType::Vector:case ValueType::Structure:case ValueType::Array:case ValueType::Name:break;
+        default:return {}; // Original AddElement has no output for unsupported types, even an empty array.
+        }
+        auto value=at(array,index);
+        if(value->type==ValueType::LocalString){charge(value->text.size());value=string_value(value->text);}
+        return structure_value({{name_crc("val"),std::move(value)}});
+    }
+
 };
 }
 void Interpreter::install_data_hosts(){
+    for(unsigned dimensions:{2u,3u})bind(name_crc(dimensions==2?"Get2DArrayData":"Get3DArrayData"),[this,dimensions](const HostCall& call){
+        Search search{values_,0,{}};auto name=search.typed(call.arguments,name_crc("arrayName"),ValueType::Name);
+        auto array=search.named_array(call,name?name->bits:0);
+        for(unsigned i=1;i<=dimensions;++i){
+            auto index=search.typed(call.arguments,name_crc("index"+std::to_string(i)),ValueType::Integer);
+            auto bits=index?index->bits:0;
+            if(i<dimensions)array=search.child(array,bits);
+            else return HostResult{true,search.output(array,bits),{},search.work};
+        }
+        throw std::logic_error("Invalid array data dimensions");
+    });
+    bind(name_crc("GetNDArrayData"),[this](const HostCall& call){
+        Search search{values_,0,{}};auto name=search.typed(call.arguments,name_crc("arrayName"),ValueType::Name);
+        auto array=search.named_array(call,name?name->bits:0);
+        auto indices=search.typed(call.parameters,name_crc("indices"),ValueType::Array);
+        if(!indices||indices->elements.empty())throw EvalError(EvalFailure::Type,"GetNDArrayData requires nonempty script indices");
+        if(indices->element_type!=ValueType::Integer&&indices->element_type!=ValueType::Float&&indices->element_type!=ValueType::Name)
+            throw EvalError(EvalFailure::Type,"GetNDArrayData indices require scalar raw words");
+        for(std::size_t i=0;i<indices->elements.size();++i){
+            search.charge();auto index=indices->elements[i];
+            if(!index||index->type!=indices->element_type)throw EvalError(EvalFailure::Type,"Inconsistent index array type");
+            if(i+1<indices->elements.size())array=search.child(array,index->bits);
+            else return HostResult{true,search.output(array,index->bits),{},search.work};
+        }
+        throw std::logic_error("Invalid empty indices");
+    });
     bind(name_crc("GotParam"),[this](const HostCall& call){
         Search search{values_,0,{}};auto name=search.typed(call.arguments,0,ValueType::Name);
         bool found=search.contains(call.parameters,name?name->bits:0);
