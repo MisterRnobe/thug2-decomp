@@ -5,6 +5,7 @@
 #include "thug2/values.hpp"
 #include "thug2/runtime.hpp"
 #include <algorithm>
+#include <bit>
 #include <limits>
 #if defined(_WIN32)
 #define EXPORT __declspec(dllexport)
@@ -119,4 +120,19 @@ EXPORT int runtime_if_probe(int truth,int negate) {
         auto result=vm.run(1);return result.status==thug2::qb::RunStatus::Finished?event:-1;
     }catch(...){return -1;}
 }
+// Five words: kind, counter, timer bits, start_ms, started. Gate is separate.
+EXPORT int wait_make(unsigned kind,std::uint32_t amount,std::uint32_t now,std::uint32_t* words){
+    try{
+        auto s=thug2::qb::make_wait({static_cast<thug2::qb::WaitKind>(kind),amount},{0,0,now});
+        words[0]=static_cast<unsigned>(s.kind);words[1]=s.counter;words[2]=std::bit_cast<std::uint32_t>(s.timer);words[3]=s.start_ms;words[4]=s.started;return 0;
+    }catch(...){return -1;}
+}
+EXPORT int wait_advance(std::uint32_t* words,double seconds,std::uint32_t now,unsigned* gate){
+    try{
+        thug2::qb::WaitState s{static_cast<thug2::qb::WaitKind>(words[0]),words[1],std::bit_cast<float>(words[2]),words[3],words[4]!=0};
+        bool released=*gate!=0;thug2::qb::advance_wait(s,{0,seconds,now},released);
+        words[0]=static_cast<unsigned>(s.kind);words[1]=s.counter;words[2]=std::bit_cast<std::uint32_t>(s.timer);words[3]=s.start_ms;words[4]=s.started;*gate=released;return 0;
+    }catch(...){return -1;}
+}
+
 }

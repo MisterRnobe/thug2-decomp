@@ -30,7 +30,10 @@ The bounded QB executor's control/parameter rules follow cscript_exec.cpp,
 cscript_core.cpp and cscript_wait.cpp. Its owning frames, host boundary, fuel and
 diagnostics are new code. Optional tests compare pre-initialized ExecuteRepeat
 (0x00472AB0) and ExecuteIf (0x00475050) with a test boolean condition stub; they
-do not execute the original engine or full interpreter.
+do not execute the original engine or full interpreter. Wait tests also compare
+Wait/WaitOnePerFrame/WaitTime/WaitRealTime setters and UpdateWait (0x00473050),
+with controlled clock-provider stubs. The task registry and explicit frame
+policy are new portable code, not the original gameplay scheduler.
 
 Upstream distinguishes reconstructed game code from its MIT-licensed original
 tooling. No MIT license is asserted here for reconstructed game routines. See

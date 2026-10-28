@@ -181,3 +181,7 @@ The [value evaluator](VALUES.md) handles data and expressions; the
 [QB executor](RUNTIME.md) now runs a bounded subset of scripts. It does not
 connect game-engine functions, objects or scheduling. No integration into the
 playable DLL has been performed by these steps.
+
+The [native QB executor](RUNTIME.md) supports opt-in Wait and explicit per-frame
+continuations with retained call/loop stacks. `thug2-run --frames N` drives a
+bounded simulated clock; game rendering, objects and events remain separate.

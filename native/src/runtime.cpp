@@ -3,6 +3,7 @@
 #include "thug2/runtime.hpp"
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <limits>
 #include <sstream>
 
@@ -24,7 +25,7 @@ bool condition(ValuePtr v){
 }
 }
 std::string_view run_status_name(RunStatus s){
-    switch(s){case RunStatus::Finished:return "finished";case RunStatus::Fault:return "fault";case RunStatus::Limit:return "limit";}return "unknown";
+    switch(s){case RunStatus::Finished:return "finished";case RunStatus::Fault:return "fault";case RunStatus::Limit:return "limit";case RunStatus::Ready:return "ready";case RunStatus::Waiting:return "waiting";}return "unknown";
 }
 struct Interpreter::Function {
     std::uint32_t name;
@@ -32,7 +33,6 @@ struct Interpreter::Function {
     std::size_t end;
     std::unordered_map<std::size_t,std::size_t> boundaries, repeats;
 };
-Interpreter::Interpreter(const SymbolTable& symbols,EvalLimits evaluation):values_(symbols,evaluation){}
 void Interpreter::bind(std::uint32_t name,HostFunction fn){
     if(running_)throw std::logic_error("Cannot change host bindings during execution");
     if(!fn)throw std::invalid_argument("Empty host function");hosts_[name]=std::move(fn);
@@ -70,9 +70,13 @@ std::shared_ptr<const Interpreter::Function> Interpreter::compile(std::uint32_t 
 }
 struct Interpreter::Execution {
     struct Loop {std::size_t start,repeat,end=0;bool initialized=false,counted=false;std::uint32_t remaining=0;};
-    struct Frame {std::shared_ptr<const Function> function;std::size_t pc;ValuePtr params;std::vector<Loop> loops;};
+    struct Frame {std::shared_ptr<const Function> function;std::size_t pc;ValuePtr params;std::vector<Loop> loops;WaitState wait;};
     Interpreter& vm;RunLimits limits;std::vector<Frame> stack;
-    RunResult result{RunStatus::Finished,structure_value({}),0,{},false,{}, {}};
+    RunResult result{RunStatus::Finished,structure_value({}),0,{},false,{}, {},{}};
+    bool persistent=false;
+    std::optional<std::uint64_t> last_frame;
+    FrameTick tick{};
+    explicit Execution(Interpreter& owner,RunLimits bounds):vm(owner),limits(bounds){}
     void charge(std::size_t n=1){
         if(n>limits.fuel-result.work)fault(EvalFailure::Limit,"Execution fuel exhausted");result.work+=n;
     }
@@ -99,7 +103,7 @@ struct Interpreter::Execution {
         bool cached=vm.functions_.count(name)!=0;
         auto f=vm.compile(name,limits.code_tokens,limits.code_bytes);charge(cached?1:vm.values_.last_work());
         auto end=statement_end(*f,6);auto defaults=args(*f,6,end,{});
-        stack.push_back({std::move(f),end,joined(defaults,std::move(params)),{}});
+        stack.push_back({std::move(f),end,joined(defaults,std::move(params)),{}, {}});
     }
     std::uint32_t read_name(Frame& frame,std::size_t end){
         auto b=frame.function->doc.bytes();auto t=read_token(b,frame.pc);
@@ -133,6 +137,11 @@ struct Interpreter::Execution {
         auto arguments=args(*f,frame.pc,end,frame.params);frame.pc=end;
         if(auto host=vm.hosts_.find(name);host!=vm.hosts_.end()){
             auto function=host->second;auto response=function({name,f->name,arguments,frame.params,stack.size()});
+            charge(response.work);
+            if(response.wait){
+                if(!persistent)fault(EvalFailure::Unsupported,"Wait requires start/update execution");
+                frame.wait=make_wait(*response.wait,tick);
+            }
             if(response.outputs)frame.params=joined(frame.params,response.outputs);
             branch(response.condition);return;
         }
@@ -186,10 +195,21 @@ struct Interpreter::Execution {
         }
     }
 };
+Interpreter::Interpreter(const SymbolTable& symbols,EvalLimits evaluation):values_(symbols,evaluation){}
+Interpreter::~Interpreter()=default;
+namespace {
+struct RunningGuard {
+    bool& running;
+    explicit RunningGuard(bool& flag):running(flag){
+        if(flag)throw std::logic_error("Reentrant execution is unsupported");running=true;
+    }
+    ~RunningGuard(){running=false;}
+};
+}
 RunResult Interpreter::run(std::uint32_t script,ValuePtr parameters,RunLimits limits){
-    if(running_)return {RunStatus::Fault,{},0,{},false,EvalFailure::Unsupported,"Reentrant execution is unsupported"};
-    running_=true;struct Reset{bool& running;~Reset(){running=false;}} reset{running_};
-    Execution execution{*this,limits,{}, {RunStatus::Finished,structure_value({}),0,{},false,{}, {}}};
+    if(running_)return {RunStatus::Fault,structure_value({}),0,{},false,EvalFailure::Unsupported,"Reentrant execution is unsupported",{}};
+    RunningGuard guard(running_);
+    Execution execution(*this,limits);
     try{
         if(parameters&&parameters->type!=ValueType::Structure)fault(EvalFailure::Type,"Entry parameters must be a structure");
         execution.push(script,std::move(parameters));
@@ -199,5 +219,105 @@ RunResult Interpreter::run(std::uint32_t script,ValuePtr parameters,RunLimits li
     catch(const std::exception& e){execution.result.status=RunStatus::Fault;execution.result.message=e.what();}
     if(!execution.stack.empty())execution.result.parameters=execution.stack.front().params;
     return std::move(execution.result);
+}
+TaskId Interpreter::start(std::uint32_t script,ValuePtr parameters,RunLimits limits){
+    RunningGuard guard(running_);
+    if(tasks_.size()>=256||next_task_==0)throw std::length_error("Task capacity exhausted (cancel completed tasks)");
+    auto execution=std::make_unique<Execution>(*this,limits);execution->persistent=true;
+    execution->result.status=RunStatus::Ready;
+    try{
+        if(parameters&&parameters->type!=ValueType::Structure)fault(EvalFailure::Type,"Entry parameters must be a structure");
+        execution->push(script,std::move(parameters));
+        execution->result.parameters=execution->stack.front().params;
+    }catch(const EvalError& e){execution->result.status=e.kind==EvalFailure::Limit?RunStatus::Limit:RunStatus::Fault;
+        execution->result.failure=e.kind;execution->result.message=e.what();}
+    catch(const std::exception& e){execution->result.status=RunStatus::Fault;execution->result.message=e.what();}
+    auto id=next_task_++;tasks_.emplace(id,std::move(execution));return id;
+}
+void Interpreter::accept_tick(FrameTick tick){
+    if(!std::isfinite(tick.seconds)||tick.seconds<0)throw std::invalid_argument("Invalid frame duration");
+    if(tick_){
+        if(tick.frame<tick_->frame)throw std::invalid_argument("Frame number went backwards");
+        if(tick.frame==tick_->frame){
+            if(tick.seconds!=tick_->seconds||tick.real_ms!=tick_->real_ms)throw std::invalid_argument("Conflicting clocks for the same frame");
+            return;
+        }
+    }
+    tick_=tick;one_per_frame_released_=false;
+}
+RunResult Interpreter::update(TaskId task,FrameTick tick){
+    RunningGuard guard(running_);
+    auto& execution=*tasks_.at(task);accept_tick(tick);
+    auto& r=execution.result;
+    if(execution.last_frame==tick.frame|| (r.status!=RunStatus::Ready&&r.status!=RunStatus::Waiting))return r;
+    execution.last_frame=tick.frame;execution.tick=tick;r.wait.reset();r.status=RunStatus::Finished;
+    try{
+        while(!execution.stack.empty()){
+            auto& wait=execution.stack.back().wait;
+            if(wait.kind!=WaitKind::None){
+                execution.charge();
+                if(advance_wait(wait,tick,one_per_frame_released_)){r.status=RunStatus::Waiting;r.wait=wait;break;}
+            }
+            execution.update();
+        }
+    }catch(const EvalError& e){r.status=e.kind==EvalFailure::Limit?RunStatus::Limit:RunStatus::Fault;r.failure=e.kind;r.message=e.what();}
+    catch(const std::exception& e){r.status=RunStatus::Fault;r.message=e.what();}
+    if(!execution.stack.empty())r.parameters=execution.stack.front().params;
+    return r;
+}
+std::vector<std::pair<TaskId,RunResult>> Interpreter::update_all(FrameTick tick){
+    if(running_)throw std::logic_error("Reentrant execution is unsupported");
+    accept_tick(tick);
+    std::vector<std::pair<TaskId,RunResult>> results;results.reserve(tasks_.size());
+    for(const auto& [id,execution]:tasks_){(void)execution;results.emplace_back(id,update(id,tick));}
+    return results;
+}
+RunResult Interpreter::inspect(TaskId task) const{return tasks_.at(task)->result;}
+bool Interpreter::cancel(TaskId task){
+    if(running_)throw std::logic_error("Cannot cancel during execution");return tasks_.erase(task)!=0;
+}
+void Interpreter::install_wait(){
+    bind(name_crc("Wait"),[this](const HostCall& call){
+        std::size_t work=0;
+        float value=0;
+        // Search(0, FLOAT) keeps the last numeric match; later flag names do
+        // not overwrite a numeric argument. Name-0 structures are not spread.
+        for(const auto& member:call.arguments->members){
+            if(++work>250000)fault(EvalFailure::Limit,"Wait argument search limit");
+            if(member.name)continue;
+            auto number=member.value;
+            if(number->type==ValueType::Name){
+                try{number=values_.global(number->bits);work+=values_.last_work();}
+                catch(const EvalError& e){if(e.kind!=EvalFailure::Missing)throw;continue;}
+            }
+            if(number->type==ValueType::Integer)value=static_cast<float>(std::bit_cast<std::int32_t>(number->bits));
+            if(number->type==ValueType::Float)value=std::bit_cast<float>(number->bits);
+        }
+        std::function<bool(ValuePtr,std::uint32_t,std::size_t)> contains;
+        contains=[&](ValuePtr structure,std::uint32_t flag,std::size_t depth){
+            if(depth>128)fault(EvalFailure::Limit,"Wait flag nesting limit");
+            for(const auto& m:structure->members){
+                if(++work>250000)fault(EvalFailure::Limit,"Wait flag search limit");
+                if(m.name||m.value->type!=ValueType::Name)continue;
+                if(m.value->bits==flag)return true;
+                ValuePtr included;
+                try{included=values_.global(m.value->bits);work+=values_.last_work();}
+                catch(const EvalError& e){if(e.kind!=EvalFailure::Missing)throw;}
+                if(included&&included->type==ValueType::Structure&&contains(included,flag,depth+1))return true;
+            }
+            return false;
+        };
+        auto flag=[&](std::uint32_t crc){return contains(call.arguments,crc,0);};
+        auto kind=flag(0xc847f2b9)?WaitKind::RealTimer:WaitKind::Timer;
+        double amount=value;
+        if(flag(0xd029f619)||flag(0x49e0ee96))amount=double(value)*1000.0;
+        else if(flag(0xfc37df05)||flag(0xb99ae3d6)||flag(0xdcd4ce73))kind=WaitKind::Frames;
+        else if(flag(0x4a07c332)||flag(0x019176c5))amount=double(value)*double(16.666666f);
+        else if(flag(0xecaa3345))kind=WaitKind::OnePerFrame;
+        // Match ftol's truncation/low 32 bits for finite representable inputs.
+        if(!std::isfinite(amount)||amount<-0x1p63||amount>=0x1p63)fault(EvalFailure::Arithmetic,"Wait duration outside int64");
+        auto count=static_cast<std::uint32_t>(static_cast<std::int64_t>(amount));
+        return HostResult{true,{},WaitRequest{kind,count},work};
+    });
 }
 } // namespace thug2::qb
