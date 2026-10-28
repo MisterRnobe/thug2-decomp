@@ -52,7 +52,7 @@ Jump cycles stop at limits. These checks do not require an engine allocator.
 
 ## Validation
 
-All **12 CTest suites** pass in Release and ASan/UBSan builds. Array fixtures
+All **14 CTest suites** pass in Release and ASan/UBSan builds. Array fixtures
 cover separate sizing/population choices, sticky float inference and conversion,
 empty sizing paths, numeric/checksum zero tails, strings/local strings,
 coordinates, literal global names, nested arrays and structures, ordinary
@@ -75,13 +75,12 @@ cache ownership or full interpreter execution. Unsafe original overflows,
 type confusion and null pointer tails are excluded; native fault cases are
 covered by unit tests instead. The original EXE is read-only.
 
-The 15,728-entry catalog, seed 0, empty inputs and 500 fuel gives 938 finished,
-32 limited; faults: 14,178 missing, 144 type and 436 unsupported. With only Wait
-registered and up to four 60 Hz updates: 939 finished, 96 waiting, 32 limited;
-faults: 14,075 missing, 144 type and 442 unsupported. Finished counts are
-unchanged from inline-flow support. More probes exhaust their small fuel
-budget because runtime arrays now perform both passes, including ordinary
-literal arrays. These probes are not complete gameplay validation.
+The 15,728-entry catalog, seed 0, empty inputs and 500 fuel gives 939 finished,
+40 limited; faults: 14,311 missing, 24 type and 414 unsupported. With only Wait
+registered and up to four 60 Hz updates: 940 finished, 102 waiting, 40 limited;
+faults: 14,201 missing, 24 type and 421 unsupported. These current counts also
+include RandomRange and reference-assignment support. Runtime arrays perform both passes, including ordinary literal
+arrays, so their work is reflected in the small audit fuel budget. These probes are not complete gameplay validation.
 Release and ASan/UBSan Wait-only catalog reports match exactly.
 
 Local reports: `work/array-random-oracle.json`, `array-random-no-host.json`,

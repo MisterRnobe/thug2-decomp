@@ -38,6 +38,7 @@ public:
     Interpreter& operator=(const Interpreter&)=delete;
     void bind(std::uint32_t name, HostFunction function);
     void install_wait();
+    void install_data_hosts(); // GetArraySize and StructureContains, explicitly opt-in.
     void seed_random(std::uint32_t seed);
     RunResult run(std::uint32_t script, ValuePtr parameters = {}, RunLimits limits = {});
     TaskId start(std::uint32_t script, ValuePtr parameters = {}, RunLimits limits = {});

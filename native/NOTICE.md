@@ -54,6 +54,17 @@ tests execute the original array/structure parsers and random helpers, with
 controlled heap/context/record/object/string allocation and scalar parameter
 emission, rather than the original engine allocators.
 
+RandomRange additionally follows ParseRandomRange in script/parse.cpp.
+Optional tests execute the original range, ftol and RNG helpers, comparing
+numeric types/bits and subsequent stream probes. Portable extended arithmetic,
+finite-input validation and defined overflow handling are new.
+
+Opt-in data hosts follow GetArraySize (array_cfuncs.cpp), StructureContains
+(script_cfuncs.cpp) and CStruct::Search/FindComponent (struct.cpp). Immutable
+search ownership and bounds are new. Original skater-profile QB functions are
+read from user-owned data for optional corpus checks, never copied into Git.
+Reference-assignment targets follow ExecuteCommand's re-read before '='.
+
 Upstream distinguishes reconstructed game code from its MIT-licensed original
 tooling. No MIT license is asserted here for reconstructed game routines. See
 ../LICENSE and ../NOTICE.md for upstream's notices. Game assets

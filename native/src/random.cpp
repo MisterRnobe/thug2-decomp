@@ -2,6 +2,9 @@
 // script/qb.cpp at 2d82ed2. Native keys, ownership and bounds are new.
 #include "thug2/random.hpp"
 #include "thug2/values.hpp"
+#include "extended.hpp"
+#include <cmath>
+#include <limits>
 #include <algorithm>
 #include <bit>
 
@@ -16,6 +19,31 @@ std::int32_t RandomStreams::draw(std::int32_t range,bool second){
     s.mul=(s.mul^s.value)+shift(s.value,4);s.add=s.add-0x10101010u+shift(s.value,3);
     auto product=(s.value&0xffffu)*static_cast<std::uint32_t>(range);
     return std::bit_cast<std::int32_t>(shift(product,16));
+}
+RandomRange RandomSelector::range(float a,float b,bool second,const Charge& charge){
+    if(!std::isfinite(a)||!std::isfinite(b))throw EvalError(EvalFailure::Arithmetic,"RandomRange requires finite bounds");
+    auto nearest=[](float f,std::int32_t& out){
+        double nudged=double(f)+(f>=0?double(0.1f):-double(0.1f));double n=std::trunc(nudged);
+        if(n<double(std::numeric_limits<std::int32_t>::min())||n>double(std::numeric_limits<std::int32_t>::max()))return false;
+        out=static_cast<std::int32_t>(n);return std::fabs(double(f)-n)<=double(1e-5f);
+    };
+    std::int32_t low=0,high=0;bool whole_a=nearest(a,low),whole_b=nearest(b,high);
+    if(charge)charge(1); // Equal endpoints still advance exactly one stream.
+    if(whole_a&&whole_b){
+        if(low>high)std::swap(low,high);
+        auto width=std::uint32_t(high)-std::uint32_t(low)+1u;
+        auto pick=streams_.draw(std::bit_cast<std::int32_t>(width),second);
+        return {false,std::uint32_t(pick)+std::uint32_t(low)};
+    }
+    if(a>b)std::swap(a,b);
+    auto pick=streams_.draw(0x7ff9,second);
+    // Preserve x87's 64-bit significand at each intermediate operation, then
+    // round only the final result to float32. No FMA across engine operations.
+    auto span=detail::precision64(detail::sum(double(b),-double(a)));
+    auto value=detail::scale(span,double(pick));
+    value=detail::scale(value,double(std::bit_cast<float>(std::uint32_t(0x38000801))));
+    value=detail::add(value,{double(a),0});
+    return {true,std::bit_cast<std::uint32_t>(detail::single(value))};
 }
 void RandomSelector::forget(std::uint64_t owner){for(auto& s:stored_)if(s.owner==owner)s.owner=0;}
 std::size_t RandomSelector::choose(std::uint8_t opcode,std::uint32_t script,std::size_t offset,

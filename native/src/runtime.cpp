@@ -100,8 +100,12 @@ struct Interpreter::Execution {
         }
     }
     ValueFlow flow(const Function& f){return [this,&f](std::size_t p){return resolve(f,p);};}
+    ValueRange ranges(){return [this](float a,float b,bool second){
+        auto r=vm.random_.range(a,b,second,[&](std::size_t n){charge(n);});
+        return r.floating?float_value(std::bit_cast<float>(r.bits)):integer_value(std::bit_cast<std::int32_t>(r.bits));
+    };}
     ParsedValue args(const Function& f,std::size_t p,ValuePtr params){
-        auto parsed=vm.values_.runtime_arguments(f.doc,p,f.end,std::move(params),flow(f));charge(parsed.work);return parsed;
+        auto parsed=vm.values_.runtime_arguments(f.doc,p,f.end,std::move(params),flow(f),ranges());charge(parsed.work);return parsed;
     }
     ValuePtr joined(ValuePtr a,ValuePtr b){
         if(a&&b&&(a->members.size()>250000||b->members.size()>250000-a->members.size()))fault(EvalFailure::Limit,"Parameter count limit");
@@ -118,7 +122,7 @@ struct Interpreter::Execution {
         auto b=frame.function->doc.bytes();auto t=read_token(b,frame.pc);
         if(t.opcode==0x16){auto n=word(b,frame.pc+1);frame.pc+=5;return n;}
         if(t.opcode==0x2d||t.opcode==0x2c){
-            auto v=vm.values_.read(frame.function->doc,frame.pc,end,frame.params,flow(*frame.function));charge(v.work);frame.pc=v.next;
+            auto v=vm.values_.read(frame.function->doc,frame.pc,end,frame.params,flow(*frame.function),ranges());charge(v.work);frame.pc=v.next;
             ValuePtr value=v.value;
             if(t.opcode==0x2c){value=vm.values_.member(frame.params,0);charge(vm.values_.last_work());}
             if(!value||value->type!=ValueType::Name)fault(EvalFailure::Type,"Dynamic command name is not a checksum");
@@ -131,13 +135,17 @@ struct Interpreter::Execution {
         frame.pc=resolve(*f,frame.pc);auto end=f->end;auto b=f->doc.bytes();
         auto branch=[&](bool value){if(false_target&&(value==negate))stack[index].pc=*false_target;};
         std::uint32_t name;
-        if(b[frame.pc]==0x0e){
-            auto v=vm.values_.read(f->doc,frame.pc,end,frame.params,flow(*f));charge(v.work);frame.pc=v.next;
+        if(b[frame.pc]==0x2d&&frame.pc+6<end&&b[frame.pc+1]==0x16&&b[frame.pc+6]==7){
+            // ExecuteCommand re-reads the written checksum before '='. <p>=v
+            // assigns p even when p is missing, numeric, or names another symbol.
+            name=word(b,frame.pc+2);frame.pc+=6;
+        }else if(b[frame.pc]==0x0e){
+            auto v=vm.values_.read(f->doc,frame.pc,end,frame.params,flow(*f),ranges());charge(v.work);frame.pc=v.next;
             if(v.value->type!=ValueType::Name){branch(condition(v.value));return;}
             name=v.value->bits;if(!name)name=read_name(frame,end);
         }else name=read_name(frame,end);
         if(frame.pc<end&&b[frame.pc]==7){
-            ++frame.pc;auto value=vm.values_.read(f->doc,frame.pc,end,frame.params,flow(*f));charge(value.work);
+            ++frame.pc;auto value=vm.values_.read(f->doc,frame.pc,end,frame.params,flow(*f),ranges());charge(value.work);
             frame.pc=resolve(*f,value.next);
             auto next=b[frame.pc];if(next!=1&&next!=2&&next!=0x24&&next!=0)fault(EvalFailure::Unsupported,"Extra tokens after assignment");
             if(value.value->type!=ValueType::None)frame.params=joined(frame.params,structure_value({{name,value.value}}));

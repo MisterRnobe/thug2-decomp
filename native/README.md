@@ -179,8 +179,9 @@ inspect token scripts and `.qb.xbx` values without `PreFile` or EXE globals.
 The [symbol table](SYMBOLS.md) now links their global definitions and name aliases.
 The [value evaluator](VALUES.md) handles data and expressions; the
 [QB executor](RUNTIME.md) now runs a bounded subset of scripts. It does not
-connect game-engine functions, objects or scheduling. No integration into the
-playable DLL has been performed by these steps.
+connect engine objects or the gameplay scheduler. Two explicit data hosts now
+run [original profile-menu QB](HOSTS.md); no integration into the playable DLL
+has been performed by these steps.
 
 The [native QB executor](RUNTIME.md) supports opt-in Wait and explicit per-frame
 continuations with retained call/loop stacks, plus compiled switch/case dispatch. `thug2-run --frames N` drives a
@@ -196,3 +197,8 @@ Hosted CI tests Linux x64, Windows x64 and macOS Intel (`macos-15-intel`). The
 macOS label is explicit because ARM hosted runners failed to acquire capacity
 on 2026-10-28; local macOS ARM Release and ASan/UBSan checks also pass. Runner
 labels: https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+
+[RandomRange](RANDOM.md) now preserves original integer/float selection and
+rounding. `--hosts data` connects GetArraySize and StructureContains; the
+[profile corpus](HOSTS.md) validates original game-script name lookups for all
+31 profiles and the 18-visible-profile count without the original EXE.

@@ -199,4 +199,9 @@ EXPORT int runtime_array_probe(const std::uint8_t* body,std::size_t size,std::ui
     }catch(...){return -100;}
 }
 
+EXPORT int random_selector_range(void* p,std::uint32_t a,std::uint32_t b,int second,std::uint32_t* kind,std::uint32_t* bits){
+    try{auto r=static_cast<thug2::qb::RandomSelector*>(p)->range(std::bit_cast<float>(a),std::bit_cast<float>(b),second!=0);*kind=r.floating?2:1;*bits=r.bits;return 0;}
+    catch(const thug2::qb::EvalError& e){return static_cast<int>(e.kind)+1;}catch(...){return -1;}
+}
+
 }

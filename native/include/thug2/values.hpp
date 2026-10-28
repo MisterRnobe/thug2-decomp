@@ -42,6 +42,8 @@ struct ParsedValue { ValuePtr value; std::size_t next, work; };
 // Runtime-only transfer resolver. Static global materialization never uses it.
 // Arrays parsed with it perform separate sizing and population passes.
 using ValueFlow = std::function<std::size_t(std::size_t)>;
+// Optional runtime numeric provider; static materialization never inherits it.
+using ValueRange = std::function<ValuePtr(float,float,bool)>;
 // A fixed snapshot of definitions. Reconstruct after changing the symbol table.
 // Lazy materialization uses the final snapshot, not original load-time evaluation.
 class ValueEvaluator {
@@ -49,11 +51,11 @@ public:
     explicit ValueEvaluator(const SymbolTable& table, EvalLimits limits = {});
     ValuePtr global(std::uint32_t name);
     ValuePtr member(ValuePtr structure, std::uint32_t name);
-    ParsedValue read(const Document& doc, std::size_t begin, std::size_t end, ValuePtr params = {}, ValueFlow flow = {});
+    ParsedValue read(const Document& doc, std::size_t begin, std::size_t end, ValuePtr params = {}, ValueFlow flow = {}, ValueRange range = {});
     ParsedValue arguments(const Document& doc, std::size_t begin, std::size_t end, ValuePtr params = {});
     // Unlike static arguments(), stop at a top-level EOL/endscript/EOF/close-paren.
     ParsedValue runtime_arguments(const Document& doc, std::size_t begin, std::size_t end,
-                                  ValuePtr params = {}, ValueFlow flow = {});
+                                  ValuePtr params = {}, ValueFlow flow = {}, ValueRange range = {});
     ValuePtr resolved(ValuePtr value);
     std::size_t last_work() const { return steps_; }
 private:

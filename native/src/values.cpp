@@ -260,8 +260,8 @@ ValuePtr ValueEvaluator::apply(std::uint8_t op,ValuePtr a,ValuePtr b){
 
 class ValueEvaluator::Parser {
 public:
-    Parser(ValueEvaluator& e,const Document& doc,std::size_t begin,std::size_t end,ValuePtr params={},ValueFlow flow={},bool runtime=false):
-        e(e),doc(doc),b(doc.bytes()),p(begin),end(end),params(std::move(params)),flow(std::move(flow)),runtime(runtime),lines_allowed(!runtime){
+    Parser(ValueEvaluator& e,const Document& doc,std::size_t begin,std::size_t end,ValuePtr params={},ValueFlow flow={},bool runtime=false,ValueRange range={}):
+        e(e),doc(doc),b(doc.bytes()),p(begin),end(end),params(std::move(params)),flow(std::move(flow)),range(std::move(range)),runtime(runtime),lines_allowed(!runtime){
         if(begin>end||end>b.size())fail(EvalFailure::Syntax,"Invalid value source range");
     }
     ValuePtr complete(){auto v=value();skip();if(p!=end)error(EvalFailure::Unsupported,"Unconsumed value tokens");return v;}
@@ -347,6 +347,14 @@ private:
     ValuePtr value(bool expression_name=false,bool member_name=false){
         Frame frame(e);skip();auto t=token();auto start=p;p+=t.size;
         switch(t.opcode){
+        case 0x30:case 0x38:{
+            if(!range)error(EvalFailure::Unsupported,"RandomRange requires runtime RNG context");
+            if(expression_name&&t.opcode==0x38)error(EvalFailure::Unsupported,"Original expression parser does not accept RandomRange2");
+            auto bounds=token();if(bounds.opcode!=0x1f)error(EvalFailure::Syntax,"RandomRange requires an immediate pair");
+            float a=std::bit_cast<float>(word(b,p+1)),c=std::bit_cast<float>(word(b,p+5));p+=bounds.size;
+            auto v=range(a,c,t.opcode==0x38);
+            if(!v||(v->type!=ValueType::Integer&&v->type!=ValueType::Float))error(EvalFailure::Type,"RandomRange callback must return a number");
+            return e.track(std::move(v));}
         case 0x16:{auto v=e.track(name_value(word(b,start+1)));return expression_name&&!member_name?e.resolve_name(v):v;}
         case 0x17:case 0x18:return e.track(scalar(ValueType::Integer,word(b,start+1)));
         case 0x1a:return e.track(scalar(ValueType::Float,word(b,start+1)));
@@ -370,7 +378,7 @@ private:
             return e.track(structure_value(std::move(members)));}
         case 5:{FlagGuard lines(lines_allowed,true);std::vector<ValuePtr> elements;
             if(expression_name)error(EvalFailure::Unsupported,"Array literal in expression context");
-            if(flow)return runtime_array();
+            if(runtime)return runtime_array();
             for(;;){skip();auto t=peek();if(t==6){++p;break;}
                 if(t!=3&&t!=5&&t!=0x16&&t!=0x17&&t!=0x18&&t!=0x1a&&t!=0x1b&&t!=0x1c&&t!=0x1e&&t!=0x1f)
                     error(EvalFailure::Unsupported,"Runtime-dependent array element");
@@ -421,16 +429,16 @@ private:
             ++p;auto right=expression(precedence+1,op==8);left=e.apply(op,std::move(left),std::move(right));}
         return left;
     }
-    ValueEvaluator& e;const Document& doc;std::span<const std::uint8_t> b;std::size_t p,end;ValuePtr params;ValueFlow flow;bool runtime=false,lines_allowed=true;
+    ValueEvaluator& e;const Document& doc;std::span<const std::uint8_t> b;std::size_t p,end;ValuePtr params;ValueFlow flow;ValueRange range;bool runtime=false,lines_allowed=true;
 };
-ParsedValue ValueEvaluator::read(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow){
-    bool runtime=bool(flow);if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),runtime).one();
+ParsedValue ValueEvaluator::read(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow,ValueRange range){
+    bool runtime=bool(flow)||bool(range);if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),runtime,std::move(range)).one();
 }
 ParsedValue ValueEvaluator::arguments(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params){
     if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params)).parameters();
 }
-ParsedValue ValueEvaluator::runtime_arguments(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow){
-    if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),true).parameters();
+ParsedValue ValueEvaluator::runtime_arguments(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow,ValueRange range){
+    if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),true,std::move(range)).parameters();
 }
 ValuePtr ValueEvaluator::resolved(ValuePtr value){
     if(!depth_){nodes_=0;steps_=0;}return resolve_name(std::move(value));

@@ -32,6 +32,10 @@ inline Extended multiply(double a,double b){
     double high=a*b;
     return precision64({high,std::isfinite(high)?std::fma(a,b,-high):0});
 }
+inline Extended scale(Extended a,double b){
+    double high=a.high*b;
+    return precision64(sum(high,std::isfinite(high)?std::fma(a.high,b,-high)+a.low*b:0));
+}
 inline Extended divide(double a,double b){
     double high=a/b;
     return precision64({high,std::isfinite(high)?std::fma(-high,b,a)/b:0});

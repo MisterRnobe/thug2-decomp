@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace thug2::qb {
+struct RandomRange {bool floating;std::uint32_t bits;};
 struct RandomState {std::uint32_t add, mul, value;};
 class RandomStreams {
 public:
@@ -27,6 +28,7 @@ public:
     std::size_t choose(std::uint8_t opcode,std::uint32_t script,std::size_t offset,
                        std::span<const std::uint16_t> weights,std::uint64_t owner,
                        const Charge& charge={});
+    RandomRange range(float a,float b,bool second=false,const Charge& charge={});
     void forget(std::uint64_t owner);
     std::size_t stored_count() const{return stored_.size();}
 private:

@@ -42,6 +42,8 @@ and remains unchanged.
 - Runtime arrays follow separate sizing and population paths, including
   random draws in both passes and nested values; [ARRAYS.md](ARRAYS.md) explains
   capacity/type validation and zero-tail behavior.
+- Runtime RandomRange/Range2 use the original type-selection, rounding and
+  two RNG streams; [RANDOM.md](RANDOM.md) details boundaries and limitations.
 - `begin/repeat` supports nested loops. Repeat arguments are read once, on its
   first visit. With no integer count the loop is unbounded; integer counts are
   decremented as uint32. Thus repeat 0 does not mean zero iterations: it wraps.
@@ -101,7 +103,7 @@ trace and an error category/message. On faults the root parameters are retained
 if the root frame was initialized. Run state is reset even after exceptions.
 
 CLI: `thug2-run SCRIPT --load QB... [--prx ARCHIVE|--dir ROOT] [--int PARAM=VALUE]
-[--fuel N] [--trace N] [--frames N] [--fps N] [--seed N]`. Script and parameter identifiers accept names or
+[--fuel N] [--trace N] [--frames N] [--fps N] [--seed N] [--hosts data]`. Script and parameter identifiers accept names or
 `0xCRC`; int arguments must fit int32. Files and sources keep their documented
 explicit orders. Exit codes: 0 finished, 1 fault/error, 2 limit, 3 still waiting at the frame cap. Output is a
 status, parameter preview and trace. `--frames` enables only Wait and drives
@@ -187,8 +189,8 @@ UndefinedBehaviorSanitizer runs pass.
 
 The no-host catalog audit attempts all 15,728 **script definitions** in the
 565-module inspection snapshot, in CRC order, with empty inputs and 500 fuel
-per entry. Caches are shared across entries. Results: **938 finished**, 32
-limited; faults: 14,178 missing commands, 144 type faults and 436 unsupported
+per entry. Caches are shared across entries. Results: **939 finished**, 40
+limited; faults: 14,311 missing commands, 24 type faults and 414 unsupported
 features. Aliases are not counted as separate entry definitions. Early-return
 or empty scripts can finish trivially. These results do not validate complete
 gameplay behavior or prove that the remaining scripts are broken.
@@ -210,7 +212,7 @@ Wait/resume validation adds zero/exact/paused/wrapping clocks, integer-to-float
 conversion, flag precedence and inclusions, nested call/loop continuations,
 shared per-frame gates, repeated-tick idempotence, cancellation/capacity,
 invalid clocks, nonfinite durations, reentrancy and lifetime fuel bounds. All
-12 CTest suites pass in Release and ASan/UBSan builds.
+14 CTest suites pass in Release and ASan/UBSan builds.
 
 ```sh
 work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
@@ -220,11 +222,11 @@ work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
 
 With only Wait registered, the same 15,728-entry catalog, empty parameters,
 500 lifetime fuel and at most four simulated 60 Hz updates per entry gives
-939 finished, 96 waiting, 32 limited; faults: 14,075 missing, 144 type,
-442 unsupported. Each entry gets a new task, then is canceled. The remaining
+940 finished, 102 waiting, 40 limited; faults: 14,201 missing, 24 type,
+421 unsupported. Each entry gets a new task, then is canceled. The remaining
 waiters are not failures, nor is a finished entry proof of complete gameplay.
 Release and ASan/UBSan catalog reports match exactly. The no-host baseline
-now gives 938 finished with the fault counts listed above.
+now gives 939 finished with the fault counts listed above.
 
 The wait oracle checks 444 original setter cases and 2,442 update decisions
 (**2,886 checks, zero mismatches**), including unsigned wrap and timer
@@ -295,3 +297,14 @@ reader. They follow only the selected path, return its actual PC, and retain
 original bare-name speculative lookup consumption. Static globals do not
 inherit runtime random context. Runtime array control flow uses the original
 two-pass behavior with explicit type/capacity bounds; see [ARRAYS.md](ARRAYS.md).
+
+## Opt-in native data commands
+
+`install_data_hosts()` / CLI `--hosts data` registers GetArraySize and
+StructureContains. They read immutable snapshot data, return conditions and
+merge script outputs without an engine. See [HOSTS.md](HOSTS.md) for contracts,
+bounds and the first original-QB scenario: 31 profile-name lookups and the
+18-of-31 visible-profile count. Objects, events and rendered menus remain
+unconnected. `<param> = value` now targets its written checksum even when its
+previous value is absent or not a name; ordinary dynamic command names are
+still checked separately.

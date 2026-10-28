@@ -99,13 +99,13 @@ Repeat counts choose only on the first repeat; stored orders survive waits.
 Runtime arrays now make the original sizing/type pass and population pass,
 including distinct RNG consumption and nested structure/array behavior. See
 [ARRAYS.md](ARRAYS.md) for type/capacity checks and remaining null-slot limits.
-RandomRange, random engine host commands, script spawning and cache-dependent
-owner reuse remain future work. Selected statement branches can call QB, return, change parameters or
-yield at Wait through the existing runtime. Jump cycles consume lifetime fuel.
+Random engine host commands, script spawning and cache-dependent owner reuse
+remain future work. Runtime RandomRange is described below. Selected statement
+branches can call QB, return, change parameters or yield at Wait through the existing runtime. Jump cycles consume lifetime fuel.
 
 ## Validation
 
-12 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
+14 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
 stream independence, seeds, zero-weight alternatives, no-repeat retries,
 permutation cycles/boundaries, task ownership and reuse, pool capacity,
 interrupted initialization, malformed tables, jump cycles, repeat loops and
@@ -126,10 +126,10 @@ seeds, both streams, signed/overflowing range scaling, weighted tables and
 allocators, ownership lookup, inline-value parsing or the full interpreter.
 
 With seed 0, empty inputs and 500 fuel per entry, the 15,728-entry no-host
-catalog gives 938 finished, 32 limited; faults: 14,178 missing, 144 type and
-436 unsupported. With only Wait registered and up to four 60 Hz updates per
-entry: 939 finished, 96 waiting, 32 limited; faults: 14,075 missing, 144 type,
-442 unsupported. More entries now reach a missing engine command or a genuine
+catalog gives 939 finished, 40 limited; faults: 14,311 missing, 24 type and
+414 unsupported. With only Wait registered and up to four 60 Hz updates per
+entry: 940 finished, 102 waiting, 40 limited; faults: 14,201 missing, 24 type,
+421 unsupported. More entries now reach a missing engine command or a genuine
 wait/fuel stop. The additional parser work changes bounded-audit fuel costs. These are bounded catalog probes, not gameplay
 validation. Release and ASan/UBSan Wait-only reports match exactly.
 
@@ -141,7 +141,7 @@ Inline-flow fixtures additionally cover selected/common argument tails,
 assignments, expressions, defaults/overrides, QB calls/returns, named structure
 fields, selected bare flags, switch/case values, cached random repeat counts,
 physical-line boundaries, cycles, static API isolation, runtime arrays and
-permutation state across frames. All 12 suites pass under Release and ASan/UBSan;
+permutation state across frames. All 14 suites pass under Release and ASan/UBSan;
 the full 15,728-entry Wait-only reports match.
 
 ```sh
@@ -160,3 +160,54 @@ integration. New reports: `work/inline-random-oracle.json`,
 `inline-random-no-host.json`, `inline-random-wait.json`,
 `inline-random-wait-sanitize.json`, `inline-runtime-oracle.json` and
 `inline-switch-oracle.json`.
+
+## RandomRange
+
+Runtime value tokens `30` (stream one) and `38` (stream two) require an immediate
+pair token containing two float32 endpoints. They work in arguments, returns,
+assignments, defaults and structure fields, including structures within arrays.
+The original expression parser accepts `30`, but not `38`; Range2 in an
+expression faults explicitly. Direct ranges are not literal array elements.
+Static globals/default static value APIs do not consume runtime RNG.
+
+Each endpoint adds the original float 0.1 when nonnegative, subtracts it
+otherwise, then truncates. If both endpoints are within the original float 1e-5 tolerance
+of their int32 candidates, the result is an integer. Reversed endpoints swap,
+and the nominal integer interval includes its upper endpoint. Range width,
+RNG scaling and result addition preserve original 32-bit wrap, including
+unusual results for very large intervals; no signed C++ overflow is used.
+
+Other finite endpoints produce a float: Rnd/Rnd2(0x7ff9), multiply the endpoint
+difference by the draw and original float scale bits `0x38000801`, then add
+the low endpoint. Intermediates retain x87's 64-bit significand before final
+float32 rounding, using portable binary64 error-free transforms. The original
+scale can slightly overshoot the nominal high endpoint; the implementation
+preserves that rather than clamping. Equal endpoints still consume one draw.
+NaN/infinite bounds fault before drawing instead of inheriting masked x87
+invalid-conversion behavior. Fuel is charged before the draw.
+
+`ValueRange` is an explicit runtime number-provider callback alongside
+`ValueFlow`; the interpreter supplies it from the same RandomSelector streams
+used by weighted/permuted jumps. Static materialization never inherits it.
+Standalone `RandomSelector::range` returns a numeric type flag and raw bits.
+
+```sh
+/path/to/project/.venv/bin/python tools/verify_native_range.py \
+  --exe /path/to/Game/THUG2PM.exe --report work/range-oracle.json
+```
+
+The optional oracle matches **37,807 range results** (15,001 integer and
+22,806 float) plus **75,614 subsequent stream probes**, with zero mismatches.
+Original ParseRandomRange (0x0046fbd0), ftol and RNG helpers execute unchanged
+at x87 control word 0x037f. Inputs cover seven seeds, tolerance neighbors,
+subnormals, signed zero, reversed/equal endpoints, wrapped integer widths,
+float extremes and a maximum draw exposing endpoint overshoot. It compares
+type, exact result bits and returned PC; nonfinite inputs and the full parser
+are outside its x86 scope. Runtime fixtures check operand format, contexts,
+stream independence, static isolation, overrides and failure/fuel behavior.
+
+The current no-host/Wait-only counts above include RandomRange and the
+reference-assignment correction needed by [real profile scripts](HOSTS.md).
+Data hosts are not enabled in those catalog audits. Reports:
+`work/range-oracle.json`, `range-no-host.json`, `range-wait.json`,
+`range-wait-sanitize.json`, `range-data-cli.json`.
