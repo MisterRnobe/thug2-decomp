@@ -179,7 +179,7 @@ inspect token scripts and `.qb.xbx` values without `PreFile` or EXE globals.
 The [symbol table](SYMBOLS.md) now links their global definitions and name aliases.
 The [value evaluator](VALUES.md) handles data and expressions; the
 [QB executor](RUNTIME.md) now runs a bounded subset of scripts. It does not
-connect engine objects or the gameplay scheduler. Two explicit data hosts now
+connect engine objects or the gameplay scheduler. Three explicit data hosts now
 run [original profile-menu QB](HOSTS.md); no integration into the playable DLL
 has been performed by these steps.
 
@@ -199,6 +199,11 @@ on 2026-10-28; local macOS ARM Release and ASan/UBSan checks also pass. Runner
 labels: https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 
 [RandomRange](RANDOM.md) now preserves original integer/float selection and
-rounding. `--hosts data` connects GetArraySize and StructureContains; the
+rounding. `--hosts data` connects GetArraySize, StructureContains and GotParam; the
 [profile corpus](HOSTS.md) validates original game-script name lookups for all
 31 profiles and the 18-visible-profile count without the original EXE.
+
+The [menu callback corpus](HOSTS.md) now runs the original
+`generic_menu_pad_choose` handler through 33 absent/present/forwarding cases,
+including profile count and all 31 name lookups. `runtime-corpus --data` and
+`--data-wait` expose broader bounded audits with those explicit hosts enabled.

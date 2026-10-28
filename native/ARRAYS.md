@@ -52,7 +52,7 @@ Jump cycles stop at limits. These checks do not require an engine allocator.
 
 ## Validation
 
-All **14 CTest suites** pass in Release and ASan/UBSan builds. Array fixtures
+All **15 CTest suites** pass in Release and ASan/UBSan builds. Array fixtures
 cover separate sizing/population choices, sticky float inference and conversion,
 empty sizing paths, numeric/checksum zero tails, strings/local strings,
 coordinates, literal global names, nested arrays and structures, ordinary

@@ -1,5 +1,6 @@
 // Data-only script commands: array_cfuncs.cpp (GetArraySize) and
-// script_cfuncs.cpp (StructureContains), upstream 2d82ed2. Native bounds new.
+// script_cfuncs.cpp (StructureContains), script_util_cfuncs.cpp (GotParam),
+// upstream 2d82ed2. Native bounds new.
 #include "thug2/runtime.hpp"
 #include <bit>
 #include <limits>
@@ -28,14 +29,21 @@ struct Search {
         charge(values.last_work());return v;
     }
     // CStruct::Search keeps the last correctly typed match. Bare name flags
-    // must not erase a prior match of another type. Name getters keep raw names.
+    // must not erase a prior match of another type. Name queries use the
+    // specialized GetChecksum exception below.
     ValuePtr typed(ValuePtr structure,std::uint32_t name,ValueType kind){
         Guard guard(*this,structure);ValuePtr found;
         for(const auto& m:structure->members){
             charge();
             if(m.name==name){
                 auto value=m.value;
-                if(value->type==kind){found=value;continue;}
+                if(value->type==kind){
+                    // GetChecksum has a special unnamed-name rule absent
+                    // from generic Search: global structure inclusions are
+                    // not checksum values (and are not recursively expanded).
+                    if(kind==ValueType::Name&&name==0){auto symbol=global(value->bits);if(symbol&&symbol->type==ValueType::Structure)continue;}
+                    found=value;continue;
+                }
                 if(value->type==ValueType::Name)value=global(value->bits);
                 if(value&&value->type==kind)found=std::move(value);
             }else if(m.name==0&&m.value->type==ValueType::Name){
@@ -60,6 +68,11 @@ struct Search {
 };
 }
 void Interpreter::install_data_hosts(){
+    bind(name_crc("GotParam"),[this](const HostCall& call){
+        Search search{values_,0,{}};auto name=search.typed(call.arguments,0,ValueType::Name);
+        bool found=search.contains(call.parameters,name?name->bits:0);
+        return HostResult{found,{},{},search.work};
+    });
     bind(name_crc("GetArraySize"),[this](const HostCall& call){
         Search search{values_,0,{}};auto array=search.typed(call.arguments,0,ValueType::Array);
         if(!array)throw EvalError(EvalFailure::Type,"GetArraySize requires an array");

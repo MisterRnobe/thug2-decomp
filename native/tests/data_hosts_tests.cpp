@@ -39,6 +39,8 @@ int main(){try{
     check(has(structure_value({{0,name_value(800)}}),700),"Contains traverses included global structures");
     check(has(name_value(800),700),"Structure argument resolves a global name");
     check(has(structure_value({{0,name_value(820)}}),820),"Requested checksum remains raw even when it names an array");
+    check(has(structure_value({{0,name_value(700)}}),800),"StructureContains skips global-structure query and tests unnamed checksum zero");
+    check(!has(structure_value({{800,integer_value(0)}}),800),"Skipped structure name must not be treated as raw target checksum");
     check(!has(structure_value({}),700)&&!has(integer_value(3),700),"Absent field/structure gives false");
     r=vm.run(3,structure_value({{10,name_value(900)},{11,name_value(999)}}));check(r.failure==EvalFailure::Cycle,"Included-structure cycles are bounded");
     for(auto initial:{ValuePtr{},integer_value(1),name_value(999)}){

@@ -204,4 +204,19 @@ EXPORT int random_selector_range(void* p,std::uint32_t a,std::uint32_t b,int sec
     catch(const thug2::qb::EvalError& e){return static_cast<int>(e.kind)+1;}catch(...){return -1;}
 }
 
+EXPORT int gotparam_probe(const std::uint8_t* globals,std::size_t globals_size,const std::uint8_t* caller,std::size_t caller_size,const std::uint8_t* query,std::size_t query_size){
+    try{
+        using namespace random_fixture;
+        SymbolTable table;table.load_bytes("gotparam-globals",Bytes(globals,globals+globals_size));
+        Bytes body{1,0x47,0,0};append(body,name(name_crc("GotParam")));body.insert(body.end(),query,query+query_size);body.push_back(1);
+        auto result=[&](unsigned value){body.push_back(0x29);append(body,name(77));body.push_back(7);append(body,integer(static_cast<std::int32_t>(value)));body.push_back(1);};
+        result(1);jump(body,2,body.size());result(0);body.push_back(0x24);
+        Bytes file{0x23,0x16,1,0,0,0};append(file,body);file.push_back(0);table.load_bytes("gotparam-probe",std::move(file));
+        Document data(Bytes(caller,caller+caller_size));ValueEvaluator reader(table);auto params=reader.read(data,0,caller_size-1).value;
+        Interpreter vm(table);vm.install_data_hosts();auto r=vm.run(1,params);
+        if(r.status!=RunStatus::Finished)return -1;
+        for(const auto& m:r.parameters->members)if(m.name==77)return static_cast<int>(m.value->bits);return -1;
+    }catch(...){return -1;}
+}
+
 }

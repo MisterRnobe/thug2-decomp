@@ -60,9 +60,14 @@ numeric types/bits and subsequent stream probes. Portable extended arithmetic,
 finite-input validation and defined overflow handling are new.
 
 Opt-in data hosts follow GetArraySize (array_cfuncs.cpp), StructureContains
-(script_cfuncs.cpp) and CStruct::Search/FindComponent (struct.cpp). Immutable
-search ownership and bounds are new. Original skater-profile QB functions are
+(script_cfuncs.cpp), GotParam (script_util_cfuncs.cpp), and
+CStruct::Search/GetChecksum/FindComponent (struct.cpp). Immutable search ownership and bounds are new. Original skater-profile QB functions are
 read from user-owned data for optional corpus checks, never copied into Git.
+An optional test executes the complete original GotParam, specialized
+GetChecksum and component/symbol lookup against synthetic read-only PC tables,
+without helper stubs; native structure-cycle/fuel guards are tested separately.
+Original generic_menu_pad_choose QB is also read from user-owned data for
+callback/parameter-forwarding corpus checks, not copied into the repository.
 Reference-assignment targets follow ExecuteCommand's re-read before '='.
 
 Upstream distinguishes reconstructed game code from its MIT-licensed original

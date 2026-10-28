@@ -105,7 +105,7 @@ branches can call QB, return, change parameters or yield at Wait through the exi
 
 ## Validation
 
-14 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
+15 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
 stream independence, seeds, zero-weight alternatives, no-repeat retries,
 permutation cycles/boundaries, task ownership and reuse, pool capacity,
 interrupted initialization, malformed tables, jump cycles, repeat loops and
@@ -141,7 +141,7 @@ Inline-flow fixtures additionally cover selected/common argument tails,
 assignments, expressions, defaults/overrides, QB calls/returns, named structure
 fields, selected bare flags, switch/case values, cached random repeat counts,
 physical-line boundaries, cycles, static API isolation, runtime arrays and
-permutation state across frames. All 14 suites pass under Release and ASan/UBSan;
+permutation state across frames. All 15 suites pass under Release and ASan/UBSan;
 the full 15,728-entry Wait-only reports match.
 
 ```sh

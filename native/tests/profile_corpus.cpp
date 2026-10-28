@@ -49,6 +49,6 @@ int main(int argc,char** argv){
     auto count=values.member(result.parameters,name_crc("num_visible_profiles"));
     if(!count||count->type!=ValueType::Integer||count->bits!=visible)throw std::runtime_error("Original QB profile count disagrees with reference scan");
     std::cout<<"Original QB profile scenario: "<<lookups<<" name lookups, "<<visible<<" visible / "<<profiles->elements.size()<<" total profiles\n";
-    if(argc==3){std::ofstream out(argv[2]);out<<"{\n  \"modules\": "<<files.size()<<",\n  \"profiles\": "<<profiles->elements.size()<<",\n  \"lookups\": "<<lookups<<",\n  \"visible_profiles\": "<<visible<<",\n  \"registered_hosts\": [\"GetArraySize\", \"StructureContains\"],\n  \"fuel_per_call\": "<<limits.fuel<<",\n  \"scope\": \"original QB functions on inspection snapshot; no rendering or engine objects\"\n}\n";out.close();if(!out)throw std::runtime_error("Cannot write report");}
+    if(argc==3){std::ofstream out(argv[2]);out<<"{\n  \"modules\": "<<files.size()<<",\n  \"profiles\": "<<profiles->elements.size()<<",\n  \"lookups\": "<<lookups<<",\n  \"visible_profiles\": "<<visible<<",\n  \"registered_hosts\": [\"GetArraySize\", \"StructureContains\", \"GotParam\"],\n  \"fuel_per_call\": "<<limits.fuel<<",\n  \"scope\": \"original QB functions on inspection snapshot; no rendering or engine objects\"\n}\n";out.close();if(!out)throw std::runtime_error("Cannot write report");}
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
