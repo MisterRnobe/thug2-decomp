@@ -16,7 +16,7 @@ using HostFunction = std::function<HostResult(const HostCall&)>;
 struct RunLimits { std::size_t fuel=10000, calls=32, loops=32, code_tokens=100000, code_bytes=4194304, trace=256; };
 enum class RunStatus { Finished, Fault, Limit, Ready, Waiting };
 using TaskId = std::uint64_t;
-inline constexpr std::size_t data_host_count=6;
+inline constexpr std::size_t data_host_count=7;
 std::string_view run_status_name(RunStatus status);
 struct TraceEntry { std::uint32_t script; std::size_t offset, depth; std::uint8_t token; };
 struct RunResult {

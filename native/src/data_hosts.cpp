@@ -89,10 +89,37 @@ struct Search {
         if(value->type==ValueType::LocalString){charge(value->text.size());value=string_value(value->text);}
         return structure_value({{name_crc("val"),std::move(value)}});
     }
+    bool string_equal(std::string_view a,std::string_view b){
+        // _stricmp in the original default C locale: ASCII case folding,
+        // unsigned bytes otherwise, and C-string termination at embedded NUL.
+        auto lower=[](unsigned char c){return c>='A'&&c<='Z'?c+('a'-'A'):c;};
+        for(std::size_t i=0;;++i){
+            charge();unsigned char x=i<a.size()?static_cast<unsigned char>(a[i]):0;
+            unsigned char y=i<b.size()?static_cast<unsigned char>(b[i]):0;
+            if(lower(x)!=lower(y))return false;if(x==0)return true;
+        }
+    }
 
 };
 }
 void Interpreter::install_data_hosts(){
+    bind(name_crc("ArrayContains"),[this](const HostCall& call){
+        Search search{values_,0,{}};auto array=search.typed(call.arguments,name_crc("array"),ValueType::Array);
+        if(!array)throw EvalError(EvalFailure::Type,"ArrayContains requires array");
+        if(array->elements.empty())return HostResult{false,{},{},search.work};
+        const auto kind=array->element_type;ValuePtr target;
+        if(kind==ValueType::Integer||kind==ValueType::Name)target=search.typed(call.arguments,name_crc("contains"),kind);
+        else if(kind==ValueType::String){
+            target=search.typed(call.arguments,name_crc("contains"),ValueType::String);
+            if(!target)target=search.typed(call.arguments,name_crc("contains"),ValueType::LocalString);
+        }else return HostResult{false,{},{},search.work};
+        for(std::size_t i=0;i<array->elements.size();++i){
+            auto value=search.at(array,static_cast<std::uint32_t>(i));
+            const bool equal=kind==ValueType::String?search.string_equal(target?target->text:std::string_view{},value->text):value->bits==(target?target->bits:0);
+            if(equal)return HostResult{true,{},{},search.work};
+        }
+        return HostResult{false,{},{},search.work};
+    });
     for(unsigned dimensions:{2u,3u})bind(name_crc(dimensions==2?"Get2DArrayData":"Get3DArrayData"),[this,dimensions](const HostCall& call){
         Search search{values_,0,{}};auto name=search.typed(call.arguments,name_crc("arrayName"),ValueType::Name);
         auto array=search.named_array(call,name?name->bits:0);

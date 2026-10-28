@@ -212,7 +212,7 @@ Wait/resume validation adds zero/exact/paused/wrapping clocks, integer-to-float
 conversion, flag precedence and inclusions, nested call/loop continuations,
 shared per-frame gates, repeated-tick idempotence, cancellation/capacity,
 invalid clocks, nonfinite durations, reentrancy and lifetime fuel bounds. All
-16 CTest suites pass in Release and ASan/UBSan builds.
+17 CTest suites pass in Release and ASan/UBSan builds.
 
 ```sh
 work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
@@ -301,7 +301,7 @@ two-pass behavior with explicit type/capacity bounds; see [ARRAYS.md](ARRAYS.md)
 ## Opt-in native data commands
 
 `install_data_hosts()` / CLI `--hosts data` registers GetArraySize,
-StructureContains, GotParam and Get2DArrayData/Get3DArrayData/GetNDArrayData.
+StructureContains, GotParam, Get2DArrayData/Get3DArrayData/GetNDArrayData and ArrayContains.
 They read immutable snapshot data, return conditions and
 merge script outputs without an engine. See [HOSTS.md](HOSTS.md) for contracts,
 bounds and the first original-QB scenario: 31 profile-name lookups and the

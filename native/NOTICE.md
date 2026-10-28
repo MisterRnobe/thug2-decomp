@@ -59,7 +59,7 @@ Optional tests execute the original range, ftol and RNG helpers, comparing
 numeric types/bits and subsequent stream probes. Portable extended arithmetic,
 finite-input validation and defined overflow handling are new.
 
-Opt-in data hosts follow GetArraySize and Get2DArrayData/Get3DArrayData/
+Opt-in data hosts follow ArrayContains, GetArraySize and Get2DArrayData/Get3DArrayData/
 GetNDArrayData (array_cfuncs.cpp), StructureContains
 (script_cfuncs.cpp), GotParam (script_util_cfuncs.cpp), and
 CStruct::Search/GetChecksum/FindComponent (struct.cpp). Immutable search ownership and bounds are new. Original skater-profile QB functions are

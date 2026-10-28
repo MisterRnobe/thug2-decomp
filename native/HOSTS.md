@@ -2,11 +2,25 @@
 
 `Interpreter::install_data_hosts()` explicitly registers **GetArraySize**,
 **StructureContains**, **GotParam**, **Get2DArrayData**, **Get3DArrayData** and
-**GetNDArrayData**. CLI opts in with `--hosts data`; unknown groups are
+**GetNDArrayData** and **ArrayContains**. CLI opts in with `--hosts data`; unknown groups are
 rejected. These commands do not mutate globals, arrays or structures. Rendering,
 engine objects, input, audio and gameplay services remain unconnected.
 
 ## Command contracts
+
+`ArrayContains array=<array> contains=<value>` returns a condition without
+writing outputs. Integer arrays compare integer bits, Name arrays compare raw
+checksums, and String arrays compare C strings ignoring ASCII case (the
+original default C locale). Name queries remain raw even when naming a global
+symbol. Typed Integer/Array/String queries resolve global aliases; String
+lookup prefers a plain String match anywhere in the structure before trying
+LocalString. A LocalString query can search a String array, but a LocalString
+array itself is unsupported, as in the original switch. Float, container and
+other array types return false, with no numeric coercion or recursive search.
+Missing/wrong-type queries use original initialized defaults: integer/name zero
+or an empty string. Missing/wrong arrays fault; empty arrays return false.
+String comparison stops at embedded NUL, leaves high bytes unchanged and is
+charged per byte. Mutable engine locale changes are outside this contract.
 
 `Get2DArrayData arrayName=<name> Index1=i index2=j` and
 `Get3DArrayData arrayName=<name> Index1=i index2=j index3=k` select an
@@ -93,7 +107,7 @@ modules. It runs the actual unmodified game functions from
 
 This runs the original QB loops, expressions, array indexing, field reads,
 conditions, reference assignments and returns against decoded game data, with
-the two supporting data commands (the group now registers six in total). No script bodies/assets are copied into
+the two supporting data commands (the group now registers seven in total). No script bodies/assets are copied into
 Git and no original EXE, Windows DLL or allocator executes. The test allows
 100,000 fuel per call. Release and ASan/UBSan reports match exactly.
 
@@ -105,7 +119,7 @@ globals and original cache identity/lifetimes remain separate work.
 
 ## Validation
 
-16 CTest suites pass in Release and ASan/UBSan builds. Data-host tests cover
+17 CTest suites pass in Release and ASan/UBSan builds. Data-host tests cover
 opt-in binding, typed searches, global aliases, all three nested indices,
 ignored missing earlier indices, immutable input arrays, missing/wrong/out-of-
 bounds values, named fields and flags, included globals, raw checksum names,
@@ -118,7 +132,12 @@ than full-function x86-oracled. Their separate suite covers 27 typed dimension
 cases (nine output types across 1D/2D/3D), local/global precedence and aliases,
 raw ND indices, command/frame separation, default zero indices, immutable
 outputs, unsupported leaf preservation, invalid paths, malformed external
-arrays and fuel limits. GotParam has the independent full-function check below.
+arrays and fuel limits. ArrayContains has a separate suite checking condition
+flow, signed integers, raw names, aliases, wrong-type defaults, plain/local
+string selection, case/prefix/NUL/high-byte behavior, unsupported arrays,
+parameter retention, malformed inputs and comparison work limits. It is
+source-checked, not independently x86-oracled. GotParam has the independent
+full-function check below.
 
 Reports: `work/profile-corpus.json`, `profile-sanitize.json`,
 `range-data-cli.json`. See [RANDOM.md](RANDOM.md) for RandomRange's independent
@@ -162,7 +181,7 @@ included globals, named nested structures, fallback query zero and query
 selection. Native unit tests separately cover cyclic inclusions, fuel,
 callee isolation, defaults, parameter forwarding and immutable inputs.
 
-The data modes enable six hosts, optionally Wait as a seventh. Otherwise
+The data modes enable seven hosts, optionally Wait as an eighth. Otherwise
 the audit conditions stay fixed: 15,728 definitions in CRC order, seed 0,
 empty inputs, 500 lifetime fuel and up to four simulated updates with Wait.
 
@@ -182,6 +201,11 @@ references to their command names, so no new original-QB scenario is claimed
 for them. The 31-profile lookup / 18-visible count and all 33 menu callback
 cases still pass with the expanded group. The current seven-host audit reports
 are `work/array-data-wait.json` and `work/array-data-wait-sanitize.json`.
+ArrayContains has direct references in `keyboard_button_pressed` and
+`reset_gamemode`; these scripts still require additional inputs/engine commands.
+The eight-host audit is recorded separately as
+`work/array-contains-data-wait.json` and
+`work/array-contains-data-wait-sanitize.json`.
 
 Additional local reports: `work/gotparam-oracle.json`, `gotparam-data.json`,
 `gotparam-data-wait.json`, `gotparam-data-wait-sanitize.json`,
