@@ -174,4 +174,29 @@ EXPORT int runtime_inline_arguments(const std::uint8_t* body,std::size_t size,st
     }catch(...){return -1;}
 }
 
+EXPORT int runtime_array_probe(const std::uint8_t* body,std::size_t size,std::uint32_t seed,std::uint32_t* out,std::size_t capacity){
+    try{
+        using namespace random_fixture;
+        Bytes file{0x23,0x16,1,0,0,0,1,0x16,100,0,0,0};file.insert(file.end(),body,body+size);file.push_back(1);
+        for(unsigned i=0;i<8;++i){append(file,name(101));append(file,random_block(i%2?0x37:0x2f,{1,1},{integer(11),integer(22)}));}
+        file.insert(file.end(),{0x24,0});SymbolTable table;table.load_bytes("array-probe",std::move(file));Interpreter vm(table);vm.seed_random(seed);
+        ValuePtr array;std::vector<std::uint32_t> probes;
+        vm.bind(100,[&](const HostCall& c){array=c.arguments->members.at(0).value;return HostResult{};});
+        vm.bind(101,[&](const HostCall& c){probes.push_back(c.arguments->members.at(0).value->bits);return HostResult{};});
+        auto r=vm.run(1);if(r.status!=RunStatus::Finished)return -1-static_cast<int>(r.failure.value_or(EvalFailure::Unsupported));
+        if(r.trace.size()<3||probes.size()!=8||!array)return -100;
+        std::size_t n=0;auto put=[&](std::uint32_t value){if(n>=capacity)throw std::length_error("Array probe output capacity");out[n++]=value;};
+        put(static_cast<std::uint32_t>(r.trace[2].offset-6));
+        std::function<void(ValuePtr)> emit=[&](ValuePtr v){
+            put(static_cast<unsigned>(v->type));
+            if(v->type==ValueType::Array){put(static_cast<unsigned>(v->element_type));put(static_cast<std::uint32_t>(v->elements.size()));for(const auto& child:v->elements)emit(child);}
+            else if(v->type==ValueType::Structure){put(static_cast<std::uint32_t>(v->members.size()));for(const auto& m:v->members){put(m.name);emit(m.value);}}
+            else if(v->type==ValueType::String||v->type==ValueType::LocalString){put(static_cast<std::uint32_t>(v->text.size()));for(unsigned char c:v->text)put(c);}
+            else if(v->type==ValueType::Pair||v->type==ValueType::Vector){for(unsigned k=0;k<(v->type==ValueType::Pair?2u:3u);++k)put(v->coordinates[k]);}
+            else if(v->type!=ValueType::None)put(v->bits);
+        };
+        emit(array);for(auto value:probes)put(value);return static_cast<int>(n);
+    }catch(...){return -100;}
+}
+
 }

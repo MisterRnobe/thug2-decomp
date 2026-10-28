@@ -48,7 +48,11 @@ follows ParseArguments/ParseStructure/ParseExpression control points. An
 optional test runs original ParseArguments and random transfers with a
 controlled scalar AddParameter stub, comparing results and continuation state.
 The explicit runtime value callback and immutable parser state are new code;
-array control flow is rejected until its original two-pass behavior is modeled.
+runtime arrays follow ParseArray and SkipValue's two-pass behavior, with new
+native type/capacity validation and scalar zero-tail handling. Optional array
+tests execute the original array/structure parsers and random helpers, with
+controlled heap/context/record/object/string allocation and scalar parameter
+emission, rather than the original engine allocators.
 
 Upstream distinguishes reconstructed game code from its MIT-licensed original
 tooling. No MIT license is asserted here for reconstructed game routines. See

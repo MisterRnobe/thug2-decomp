@@ -286,11 +286,64 @@ private:
     struct FlagGuard {bool& flag;bool saved;FlagGuard(bool& flag,bool value):flag(flag),saved(flag){flag=value;}~FlagGuard(){flag=saved;}};
     void resolve(){
         if(!flow||p>=end)return;
-        if(in_array&&(b[p]==0x2e||b[p]==0x49||b[p]==0x2f||b[p]==0x37||b[p]==0x40||b[p]==0x41))
-            error(EvalFailure::Unsupported,"Control flow inside arrays requires original two-pass parsing");
         e.step();p=flow(p);if(p>=end)error(EvalFailure::Syntax,"Value flow escaped its source");
     }
     void skip(){for(;;){resolve();if(p>=end)break;if(b[p]==9||(lines_allowed&&(b[p]==1||b[p]==2)))p+=token().size;else break;}}
+    static ValueType array_type(std::uint8_t op){
+        switch(op){
+        case 3:return ValueType::Structure;case 5:return ValueType::Array;
+        case 0x16:return ValueType::Name;case 0x17:case 0x18:return ValueType::Integer;
+        case 0x1a:return ValueType::Float;case 0x1b:return ValueType::String;
+        case 0x1c:return ValueType::LocalString;case 0x1e:return ValueType::Vector;case 0x1f:return ValueType::Pair;
+        default:return ValueType::None;
+        }
+    }
+    void skip_array_value(){
+        // Original SkipValue is lexical here: it must not resolve transfers or
+        // evaluate nested structures/arrays during the outer sizing pass.
+        auto t=token();if(t.opcode!=3&&t.opcode!=5){p+=t.size;return;}
+        auto open=t.opcode,close=static_cast<std::uint8_t>(open+1);std::size_t depth=0;
+        do{
+            auto current=token();if(current.opcode==open)++depth;if(current.opcode==close)--depth;
+            if(current.opcode==0||current.opcode==0x24)error(EvalFailure::Syntax,"Unterminated array element");
+            p+=current.size;
+        }while(depth);
+    }
+    ValuePtr runtime_array(){
+        auto first=p;ValueType kind=ValueType::None;std::size_t count=0;
+        for(;;){
+            resolve();auto t=token();if(t.opcode==6){++p;break;}
+            if(t.opcode==1||t.opcode==2||t.opcode==9){p+=t.size;continue;}
+            auto type=array_type(t.opcode);if(type==ValueType::None)error(EvalFailure::Unsupported,"Unsupported array sizing token");
+            if(type!=ValueType::Integer||kind!=ValueType::Float)kind=type;
+            if(++count>e.limits_.nodes)error(EvalFailure::Limit,"Array element count limit");
+            skip_array_value();
+        }
+        if(!count)return e.track(array_value({})); // Original skips the second pass for an empty sizing path.
+        std::vector<ValuePtr> elements;elements.reserve(count);p=first;
+        for(;;){
+            resolve();auto t=token();if(t.opcode==6){++p;break;}
+            if(t.opcode==1||t.opcode==2||t.opcode==9){p+=t.size;continue;}
+            if(elements.size()==count)error(EvalFailure::Type,"Array population exceeds sizing-pass capacity");
+            auto type=array_type(t.opcode);
+            if(type!=kind&&!(kind==ValueType::Float&&type==ValueType::Integer))
+                error(EvalFailure::Type,"Array population type differs from sizing pass");
+            auto v=value();
+            if(kind==ValueType::Float&&v->type==ValueType::Integer)
+                v=e.track(float_value(static_cast<float>(integer(v))));
+            elements.push_back(std::move(v));
+        }
+        // SetSizeAndType zeroes the original inline/block storage. A shorter
+        // scalar population leaves typed zeroes; null object slots have no
+        // immutable native value representation and are diagnosed explicitly.
+        if(elements.size()<count&&kind!=ValueType::Integer&&kind!=ValueType::Float&&kind!=ValueType::Name)
+            error(EvalFailure::Unsupported,"Unfilled pointer array slots are not represented");
+        while(elements.size()<count){
+            auto zero=kind==ValueType::Integer?integer_value(0):kind==ValueType::Float?float_value(0):name_value(0);
+            elements.push_back(e.track(std::move(zero)));
+        }
+        return e.track(array_value(std::move(elements)));
+    }
     ValuePtr value(bool expression_name=false,bool member_name=false){
         Frame frame(e);skip();auto t=token();auto start=p;p+=t.size;
         switch(t.opcode){
@@ -315,8 +368,9 @@ private:
                 else add_member(members,{name,std::move(v)});
             }
             return e.track(structure_value(std::move(members)));}
-        case 5:{FlagGuard lines(lines_allowed,true);FlagGuard array(in_array,true);std::vector<ValuePtr> elements;
+        case 5:{FlagGuard lines(lines_allowed,true);std::vector<ValuePtr> elements;
             if(expression_name)error(EvalFailure::Unsupported,"Array literal in expression context");
+            if(flow)return runtime_array();
             for(;;){skip();auto t=peek();if(t==6){++p;break;}
                 if(t!=3&&t!=5&&t!=0x16&&t!=0x17&&t!=0x18&&t!=0x1a&&t!=0x1b&&t!=0x1c&&t!=0x1e&&t!=0x1f)
                     error(EvalFailure::Unsupported,"Runtime-dependent array element");
@@ -367,7 +421,7 @@ private:
             ++p;auto right=expression(precedence+1,op==8);left=e.apply(op,std::move(left),std::move(right));}
         return left;
     }
-    ValueEvaluator& e;const Document& doc;std::span<const std::uint8_t> b;std::size_t p,end;ValuePtr params;ValueFlow flow;bool runtime=false,lines_allowed=true,in_array=false;
+    ValueEvaluator& e;const Document& doc;std::span<const std::uint8_t> b;std::size_t p,end;ValuePtr params;ValueFlow flow;bool runtime=false,lines_allowed=true;
 };
 ParsedValue ValueEvaluator::read(const Document& doc,std::size_t begin,std::size_t end,ValuePtr params,ValueFlow flow){
     bool runtime=bool(flow);if(!depth_){nodes_=0;steps_=0;}return Parser(*this,doc,begin,end,std::move(params),std::move(flow),runtime).one();

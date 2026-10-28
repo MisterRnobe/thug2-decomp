@@ -188,8 +188,9 @@ bounded simulated clock; game rendering, objects and events remain separate.
 
 [Random statement jumps](RANDOM.md) now use the two original RNG streams,
 weighted choices and bounded no-repeat/permutation histories; `--seed N`
-makes fresh executions reproducible. Inline random values work in runtime arguments/expressions; array control
-flow remains future work.
+makes fresh executions reproducible. Inline random values work in runtime arguments/expressions.
+[Runtime arrays](ARRAYS.md) now preserve two-pass random selection, nested
+values, sizing types and scalar zero tails, with checked capacity.
 
 Hosted CI tests Linux x64, Windows x64 and macOS Intel (`macos-15-intel`). The
 macOS label is explicit because ARM hosted runners failed to acquire capacity

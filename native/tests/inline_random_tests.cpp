@@ -61,7 +61,7 @@ int main(){try{
         vm.seed_random(seed);r=vm.run(15);check(r.status==RunStatus::Finished&&member(r.parameters,20)->bits==expected(seed)&&member(r.parameters,21)->bits==7,"Return arguments include selected/common parts");
         vm.seed_random(seed);r=vm.run(16);check(r.status==RunStatus::Finished&&member(captured,0)->type==ValueType::Name&&member(captured,0)->bits==static_cast<unsigned>(expected(seed)/11+700),"Selected bare flag is preserved");
     }
-    check(vm.run(8).failure==EvalFailure::Unsupported,"Array control flow remains explicit until two-pass semantics exist");
+    vm.seed_random(0);auto array_result=vm.run(8);check(array_result.status==RunStatus::Finished&&member(array_result.parameters,20)->type==ValueType::Array,"Runtime arrays use two-pass control flow");
     events.clear();vm.seed_random(0);auto r=vm.run(12);check(r.status==RunStatus::Finished&&events.size()==3,"Random repeat count read once");
     RunLimits bounds;bounds.fuel=100;check(vm.run(13,{},bounds).status==RunStatus::Limit,"Inline cyclic jump consumes lifetime fuel");
     r=vm.run(14);check(r.status==RunStatus::Finished&&member(r.parameters,20)->bits==2,"Selected physical line determines argument end");

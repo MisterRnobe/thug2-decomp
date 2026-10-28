@@ -40,6 +40,7 @@ std::string format_value(ValuePtr value, std::size_t max_items = 100);
 struct EvalLimits { std::size_t depth=128, nodes=250000, steps=1000000; };
 struct ParsedValue { ValuePtr value; std::size_t next, work; };
 // Runtime-only transfer resolver. Static global materialization never uses it.
+// Arrays parsed with it perform separate sizing and population passes.
 using ValueFlow = std::function<std::size_t(std::size_t)>;
 // A fixed snapshot of definitions. Reconstruct after changing the symbol table.
 // Lazy materialization uses the final snapshot, not original load-time evaluation.

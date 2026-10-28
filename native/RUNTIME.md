@@ -39,13 +39,16 @@ and remains unchanged.
 - Weighted random, second-stream random, no-repeat and
   permuted branches in statements and runtime values use portable original RNG streams and bounded stored
   histories. See [random jumps](RANDOM.md) for behavior and integration limits.
+- Runtime arrays follow separate sizing and population paths, including
+  random draws in both passes and nested values; [ARRAYS.md](ARRAYS.md) explains
+  capacity/type validation and zero-tail behavior.
 - `begin/repeat` supports nested loops. Repeat arguments are read once, on its
   first visit. With no integer count the loop is unbounded; integer counts are
   decremented as uint32. Thus repeat 0 does not mean zero iterations: it wraps.
   `break` skips the innermost loop, including the repeat arguments.
 
 Loop stacks and waits are frame-local. Original cross-frame loop manipulation,
-interrupts, events, control flow in array literals, object/member dispatch,
+interrupts, events, object/member dispatch,
 resolved function-pointer tokens and engine calls inside expressions are not
 implemented. Unsupported cases fault; they are not skipped as successful no-ops.
 Unlike the original's permissive missing-command behavior, an unbound command
@@ -184,8 +187,8 @@ UndefinedBehaviorSanitizer runs pass.
 
 The no-host catalog audit attempts all 15,728 **script definitions** in the
 565-module inspection snapshot, in CRC order, with empty inputs and 500 fuel
-per entry. Caches are shared across entries. Results: **938 finished**, 16
-limited; faults: 14,194 missing commands, 144 type faults and 436 unsupported
+per entry. Caches are shared across entries. Results: **938 finished**, 32
+limited; faults: 14,178 missing commands, 144 type faults and 436 unsupported
 features. Aliases are not counted as separate entry definitions. Early-return
 or empty scripts can finish trivially. These results do not validate complete
 gameplay behavior or prove that the remaining scripts are broken.
@@ -207,7 +210,7 @@ Wait/resume validation adds zero/exact/paused/wrapping clocks, integer-to-float
 conversion, flag precedence and inclusions, nested call/loop continuations,
 shared per-frame gates, repeated-tick idempotence, cancellation/capacity,
 invalid clocks, nonfinite durations, reentrancy and lifetime fuel bounds. All
-11 CTest suites pass in Release and ASan/UBSan builds.
+12 CTest suites pass in Release and ASan/UBSan builds.
 
 ```sh
 work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
@@ -217,7 +220,7 @@ work/native-build/runtime-corpus /path/to/Game/Data work/wait-corpus.json --wait
 
 With only Wait registered, the same 15,728-entry catalog, empty parameters,
 500 lifetime fuel and at most four simulated 60 Hz updates per entry gives
-939 finished, 96 waiting, 16 limited; faults: 14,091 missing, 144 type,
+939 finished, 96 waiting, 32 limited; faults: 14,075 missing, 144 type,
 442 unsupported. Each entry gets a new task, then is canceled. The remaining
 waiters are not failures, nor is a finished entry proof of complete gameplay.
 Release and ASan/UBSan catalog reports match exactly. The no-host baseline
@@ -290,5 +293,5 @@ are part of the random-enabled catalog audit conditions.
 Runtime values use an explicit transfer callback and a line-stopping argument
 reader. They follow only the selected path, return its actual PC, and retain
 original bare-name speculative lookup consumption. Static globals do not
-inherit runtime random context. Array control flow remains unsupported until
-its original two-pass behavior is implemented; see [RANDOM.md](RANDOM.md).
+inherit runtime random context. Runtime array control flow uses the original
+two-pass behavior with explicit type/capacity bounds; see [ARRAYS.md](ARRAYS.md).

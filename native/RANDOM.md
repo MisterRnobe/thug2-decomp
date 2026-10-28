@@ -96,17 +96,16 @@ this is intentional original behavior rather than a cached speculative choice.
 Defaults also consume their choices before entry/call parameters override them.
 Repeat counts choose only on the first repeat; stored orders survive waits.
 
-Control flow inside array literals remains explicitly unsupported, including
-random inside a structure nested in an array. The original array parser makes
-a sizing/type pass and a population pass, with distinct RNG consumption; a
-single-pass choice would silently differ. RandomRange, random engine host
-commands, script spawning and cache-dependent owner reuse also remain future
-work. Selected statement branches can call QB, return, change parameters or
+Runtime arrays now make the original sizing/type pass and population pass,
+including distinct RNG consumption and nested structure/array behavior. See
+[ARRAYS.md](ARRAYS.md) for type/capacity checks and remaining null-slot limits.
+RandomRange, random engine host commands, script spawning and cache-dependent
+owner reuse remain future work. Selected statement branches can call QB, return, change parameters or
 yield at Wait through the existing runtime. Jump cycles consume lifetime fuel.
 
 ## Validation
 
-11 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
+12 CTest suites pass in Release and ASan/UBSan builds. Random fixtures cover
 stream independence, seeds, zero-weight alternatives, no-repeat retries,
 permutation cycles/boundaries, task ownership and reuse, pool capacity,
 interrupted initialization, malformed tables, jump cycles, repeat loops and
@@ -127,9 +126,9 @@ seeds, both streams, signed/overflowing range scaling, weighted tables and
 allocators, ownership lookup, inline-value parsing or the full interpreter.
 
 With seed 0, empty inputs and 500 fuel per entry, the 15,728-entry no-host
-catalog gives 938 finished, 16 limited; faults: 14,194 missing, 144 type and
+catalog gives 938 finished, 32 limited; faults: 14,178 missing, 144 type and
 436 unsupported. With only Wait registered and up to four 60 Hz updates per
-entry: 939 finished, 96 waiting, 16 limited; faults: 14,091 missing, 144 type,
+entry: 939 finished, 96 waiting, 32 limited; faults: 14,075 missing, 144 type,
 442 unsupported. More entries now reach a missing engine command or a genuine
 wait/fuel stop. The additional parser work changes bounded-audit fuel costs. These are bounded catalog probes, not gameplay
 validation. Release and ASan/UBSan Wait-only reports match exactly.
@@ -141,8 +140,8 @@ original EXE and reports stay out of Git.
 Inline-flow fixtures additionally cover selected/common argument tails,
 assignments, expressions, defaults/overrides, QB calls/returns, named structure
 fields, selected bare flags, switch/case values, cached random repeat counts,
-physical-line boundaries, cycles, static API isolation, array rejection and
-permutation state across frames. All 11 suites pass under Release and ASan/UBSan;
+physical-line boundaries, cycles, static API isolation, runtime arrays and
+permutation state across frames. All 12 suites pass under Release and ASan/UBSan;
 the full 15,728-entry Wait-only reports match.
 
 ```sh
