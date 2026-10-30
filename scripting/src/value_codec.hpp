@@ -26,12 +26,18 @@ struct RichLimits {
 // - Validation/limit failures happen before or without any QuickJS state
 //   change and surface as std::runtime_error; the QuickJS context is left
 //   with no pending exception.
+// - The total payload budget (RichLimits::max_payload_bytes) counts every
+//   transported word: scalar bits, string bytes, coordinate words and
+//   structure/parameter field-name CRCs, per transported occurrence.
 // - If a QuickJS allocation or property access fails and leaves a pending
 //   exception, encode returns JS_EXCEPTION (the pending exception stays for
 //   the caller) and decode converts the pending exception into
 //   std::runtime_error after clearing it, so the context stays reusable.
 // - Successfully encoded JSValues are owned by the caller (single reference,
 //   free with JS_FreeValue); on any error path nothing leaks.
+// - Encoded objects carry own data properties created via define semantics:
+//   prototype setters or non-writable inherited properties cannot intercept
+//   or corrupt the transported shape.
 // Reference tags 20/21 are not representable in the model and are rejected
 // explicitly at any depth.
 class RichCodec {

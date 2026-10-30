@@ -168,21 +168,28 @@ struct RichCodec::Impl {
     // --- preflight: model limits, before any QuickJS state ------------------
     // Walks the immutable model and charges the full budget so that the
     // encode walk itself can only fail through QuickJS allocations.
+    // Payload accounting is total (issue #21): every transported word counts,
+    // including scalar bits and structure/parameter field-name CRCs.
+    static constexpr std::size_t word_bytes = sizeof(std::uint32_t);
     void preflight(const RichValue& value) {
         budget.node();
         const std::uint32_t type = value.type();
-        if (is_scalar_type(type)) return;
+        if (is_scalar_type(type)) {
+            budget.payload_bytes(word_bytes); // transported bits word
+            return;
+        }
         if (is_string_type(type)) {
             budget.payload_bytes(value.bytes().size());
             return;
         }
         if (is_coord_type(type)) {
-            budget.payload_bytes(value.coordinates().size() * sizeof(std::uint32_t));
+            budget.payload_bytes(value.coordinates().size() * word_bytes);
             return;
         }
         DepthGuard guard(budget);
         if (type == 10) {
             if (value.member_names().size() > RichLimits::max_fields) fail("field limit");
+            budget.payload_bytes(value.member_names().size() * word_bytes); // CRC names
             for (const RichValue& v : value.member_values()) preflight(v);
             return;
         }
@@ -194,16 +201,19 @@ struct RichCodec::Impl {
     // The model is immutable and preflighted, so every failure below is a
     // QuickJS allocation failure: return JS_EXCEPTION and leave the pending
     // exception in place (ensure_pending backfills one if QuickJS did not).
-    // All consuming calls (JS_SetPropertyStr, JS_DefinePropertyValueUint32)
+    // All consuming calls (JS_DefinePropertyValueStr/Uint32)
     // free their value on both success and failure, so values are handed over
     // exactly once and never freed twice.
+    // Define semantics (not assignment): the property is created as an own
+    // data property regardless of prototype contents, so inherited setters
+    // or non-writable inherited properties cannot intercept transport writes.
     bool set_u32(JSValueConst object, const char* key, std::uint32_t x) {
         JSValue v = JS_NewUint32(context, x);
         if (JS_IsException(v)) return false;
-        return JS_SetPropertyStr(context, object, key, v) >= 0; // consumes v
+        return JS_DefinePropertyValueStr(context, object, key, v, JS_PROP_C_W_E) >= 0; // consumes v
     }
     bool set_value(JSValueConst object, const char* key, JSValue v) {
-        return JS_SetPropertyStr(context, object, key, v) >= 0; // consumes v
+        return JS_DefinePropertyValueStr(context, object, key, v, JS_PROP_C_W_E) >= 0; // consumes v
     }
     bool push_u32(JSValueConst array, std::uint32_t index, std::uint32_t x) {
         JSValue v = JS_NewUint32(context, x);
@@ -353,6 +363,7 @@ struct RichCodec::Impl {
         const std::uint32_t type = type_tag(value);
         if (is_scalar_type(type)) {
             const std::uint32_t bits = uint32_property(value, "bits");
+            budget.payload_bytes(word_bytes); // transported bits word
             return type == 1 ? RichValue::integer(bits)
                  : type == 2 ? RichValue::floating(bits)
                              : RichValue::name(bits);
@@ -406,6 +417,7 @@ struct RichCodec::Impl {
             if (!is_array(g.slot())) fail("expected members array");
             const std::uint32_t length = array_length(g.slot());
             if (length > RichLimits::max_fields) fail("field limit");
+            budget.payload_bytes(length * word_bytes); // CRC names
             std::vector<std::uint32_t> names(length);
             std::vector<RichValue> values;
             values.reserve(length);
@@ -452,6 +464,7 @@ struct RichCodec::Impl {
         if (!is_array(array)) fail("expected parameters array");
         const std::uint32_t length = array_length(array);
         if (length > RichLimits::max_fields) fail("field limit");
+        budget.payload_bytes(length * word_bytes); // CRC names
         RichParameters out;
         out.reserve(length);
         for (std::uint32_t i = 0; i < length; ++i) {

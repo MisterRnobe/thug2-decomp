@@ -814,6 +814,151 @@ void test_review_decode_context_poisoning() {
         JS_FreeValue(rt.ctx, ok);
     }
 }
+
+// Review round 2 (P2): total payload accounting must include scalar bits
+// words and field-name CRCs, not only string bytes and coordinates.
+void test_review_total_payload() {
+    Runtime rt;
+    RichCodec codec(rt.ctx);
+    // Reviewer fixture shape: 16 shared string arrays of 250000 bytes plus
+    // 100000 scalar bits words = 4400000 bytes > 4 MiB. Each transported
+    // occurrence counts.
+    CHECK_DECODE_FAILS(
+        "(()=>{"
+        "const s={type:3,bytes:new Array(250000).fill(65)};"
+        "const n={type:1,bits:7};"
+        "return {type:10,members:["
+        "[1,{type:12,elementType:3,elements:new Array(16).fill(s)}],"
+        "[2,{type:12,elementType:1,elements:new Array(100000).fill(n)}]"
+        "]};})()",
+        "payload");
+    // Mirror on the encode side: the same shape must be rejected by the
+    // preflight (a C++ throw) before any QuickJS allocation.
+    {
+        RichValue s = RichValue::string(RichValue::Bytes(250000, 'A'));
+        std::vector<RichValue> strings(16, s);
+        RichValue strings_array = RichValue::array(3, std::move(strings));
+        std::vector<RichValue> nums(100000, RichValue::integer(7));
+        RichValue nums_array = RichValue::array(1, std::move(nums));
+        RichValue big = RichValue::structure({1, 2},
+            {std::move(strings_array), std::move(nums_array)});
+        bool threw = false;
+        try {
+            JSValue out = codec.encode(big);
+            if (JS_IsException(out)) {
+                std::printf("FAIL %s:%d: bare sentinel for payload limit\n", __FILE__, __LINE__);
+                ++failures;
+                JSValue exc = JS_GetException(rt.ctx);
+                JS_FreeValue(rt.ctx, exc);
+            }
+            JS_FreeValue(rt.ctx, out);
+        } catch (const std::runtime_error&) { threw = true; }
+        CHECK(threw);
+        CHECK(!JS_HasException(rt.ctx));
+    }
+    // Just under the limit must still succeed: 16*250000 string bytes
+    // + 2 field CRCs (8) + 48574 scalar bits words (194296) = 4194304? No:
+    // 4000000 + 8 + 194296 = 4194304 = exactly the limit... one less scalar.
+    {
+        RichValue s = RichValue::string(RichValue::Bytes(250000, 'A'));
+        std::vector<RichValue> strings(16, s);
+        RichValue strings_array = RichValue::array(3, std::move(strings));
+        std::vector<RichValue> nums(48573, RichValue::integer(7));
+        RichValue nums_array = RichValue::array(1, std::move(nums));
+        RichValue ok = RichValue::structure({1, 2},
+            {std::move(strings_array), std::move(nums_array)});
+        JSValue out = codec.encode(ok);
+        CHECK(!JS_IsException(out));
+        JS_FreeValue(rt.ctx, out);
+    }
+}
+
+// Review round 2 (P2): encoded output must be immune to prototype setters;
+// writes use define semantics, so inherited setters never run and the own
+// data property always materializes with the exact transported bits.
+void test_review_prototype_setters() {
+    Runtime rt;
+    RichCodec codec(rt.ctx);
+    // Install inherited interceptors on Object.prototype for every key the
+    // codec writes (assignment semantics would invoke them all).
+    JSValue install = eval(rt.ctx,
+        "globalThis.setterCalls = 0;"
+        "for (const k of ['type','bits','bytes','coordinates','members',"
+        "'elements','elementType']) {"
+        "  Object.defineProperty(Object.prototype, k, {"
+        "    set(x){ ++globalThis.setterCalls; },"
+        "    get(){ return 111; },"
+        "    configurable: true"
+        "  });"
+        "}");
+    JS_FreeValue(rt.ctx, install);
+    struct Cleanup {
+        JSContext* ctx;
+        ~Cleanup() {
+            JSValue cleanup = JS_Eval(ctx,
+                "for (const k of ['type','bits','bytes','coordinates','members',"
+                "'elements','elementType']) delete Object.prototype[k];",
+                155, "<cleanup>", JS_EVAL_TYPE_GLOBAL);
+            JS_FreeValue(ctx, cleanup);
+        }
+    } cleanup{rt.ctx};
+    // Scalar: bits must be an own data property with the exact value.
+    {
+        JSValue out = codec.encode(RichValue::integer(123));
+        CHECK(!JS_IsException(out));
+        CHECK(num(rt.ctx, out, "type") == 1);
+        CHECK(num(rt.ctx, out, "bits") == 123);
+        JS_FreeValue(rt.ctx, out);
+    }
+    // String: own bytes array with exact bytes.
+    {
+        JSValue out = codec.encode(RichValue::string({'A', 0x80, 0xFF}));
+        CHECK(!JS_IsException(out));
+        CHECK(num(rt.ctx, out, "type") == 3);
+        JSValue bytes = JS_GetPropertyStr(rt.ctx, out, "bytes");
+        CHECK(len(rt.ctx, bytes) == 3);
+        JSValue b1 = at(rt.ctx, bytes, 1);
+        std::uint32_t x = 0;
+        JS_ToUint32(rt.ctx, &x, b1);
+        CHECK(x == 0x80);
+        JS_FreeValue(rt.ctx, b1);
+        JS_FreeValue(rt.ctx, bytes);
+        JS_FreeValue(rt.ctx, out);
+    }
+    // Nested structure/array: metadata fields intact at depth.
+    {
+        RichValue inner = RichValue::structure({0xAA}, {RichValue::name(7)});
+        JSValue out = codec.encode(RichValue::array(10, {inner, RichValue::structure({0xBB}, {RichValue::name(8)})}));
+        CHECK(!JS_IsException(out));
+        CHECK(num(rt.ctx, out, "elementType") == 10);
+        JSValue elements = JS_GetPropertyStr(rt.ctx, out, "elements");
+        CHECK(len(rt.ctx, elements) == 2);
+        JSValue first = at(rt.ctx, elements, 0);
+        JSValue members = JS_GetPropertyStr(rt.ctx, first, "members");
+        CHECK(len(rt.ctx, members) == 1);
+        JS_FreeValue(rt.ctx, members);
+        JS_FreeValue(rt.ctx, first);
+        JS_FreeValue(rt.ctx, elements);
+        JS_FreeValue(rt.ctx, out);
+    }
+    // encode_parameters: fields are arrays (element writes), but the check
+    // covers the overall encode path under poisoned prototypes.
+    {
+        RichParameters params = {RichField{0x11, RichValue::integer(42)}};
+        JSValue out = codec.encode_parameters(params);
+        CHECK(!JS_IsException(out));
+        CHECK(len(rt.ctx, out) == 1);
+        JS_FreeValue(rt.ctx, out);
+    }
+    // No interceptor may have run.
+    JSValue global = JS_GetGlobalObject(rt.ctx);
+    JSValue calls = JS_GetPropertyStr(rt.ctx, global, "setterCalls");
+    JS_FreeValue(rt.ctx, global);
+    std::uint32_t n = 0;
+    JS_ToUint32(rt.ctx, &n, calls);
+    CHECK(n == 0);
+    JS_FreeValue(rt.ctx, calls);
+}
 } // namespace
 
 int main() {
@@ -833,6 +978,8 @@ int main() {
     test_decode_negatives();
     test_review_double_free_and_sentinel();
     test_review_decode_context_poisoning();
+    test_review_total_payload();
+    test_review_prototype_setters();
     test_recovery_and_reuse();
     test_limits();
     if (failures == 0) {
