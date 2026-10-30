@@ -5,7 +5,7 @@
 // This reads raw token streams, not the separate PC precompiled-image format.
 import { closeSync, existsSync, fstatSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import type { Call, Definition, Expr, Field, ModuleIR, Statement, SwitchLabel } from "./ir.ts";
+import type { Call, Definition, Expr, Field, ModuleIR, QualifiedCall, Statement, SwitchLabel } from "./ir.ts";
 
 export type ReaderLimits = { nodes?: number; depth?: number };
 export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLimits = {}): ModuleIR {
@@ -357,6 +357,26 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
             n = name();
         return { kind: "call", offset, name: n, fields: parameters(0, false, allowRandomExit) };
     };
+    // A `name:command` call (token 0x42 after the object name). The reader
+    // keeps the object name and every original offset; object dispatch itself
+    // is not built here, so the emitter faults instead of rewriting it into
+    // a global call.
+    const qualified = (allowRandomExit = false): QualifiedCall => {
+        const objectOffset = p,
+            object = name();
+        if (byte() !== 0x42) fail("expected object qualifier");
+        const commandOffset = p,
+            n = name();
+        return {
+            kind: "qualified",
+            offset: objectOffset,
+            object,
+            objectOffset,
+            commandOffset,
+            name: n,
+            fields: parameters(0, false, allowRandomExit),
+        };
+    };
     const readBlock = (
         depth: number,
         loops: number[] = [],
@@ -463,7 +483,13 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 }
                 const end = p;
                 if (byte() !== 0x3d) fail("expected endswitch (pre-case statements are unsupported)");
-                if (exits.some((destination) => destination !== end)) fail("case exit does not target endswitch");
+                // The original compiler targets the end-of-line right after the
+                // endswitch (ResolveRandomJumps: 49 = +1 + delta from the jump
+                // byte); landing on that EOL is equivalent to landing on the
+                // endswitch itself, so accept both positions.
+                const after = b[end + 1] === 2 ? end + 5 : end + 1;
+                if (exits.some((destination) => destination !== end && destination !== after))
+                    fail("case exit does not target endswitch");
                 body.push({ kind: "switch", offset, fields, cases, ...(fallback === undefined ? {} : { fallback }) });
                 blockEnds = lines(stopAt);
                 blockEnds.add(end);
@@ -480,8 +506,23 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
             } else if (b[p] === 0x47) {
                 ++p;
                 const destination = p + short();
+                // CScript::ExecuteIf consumes an optional 0x39 NOT prefix
+                // before the condition command. ExecuteCommand accepts the
+                // object-qualified `name:command` form here too.
+                const negate = b[p] === 0x39;
+                if (negate) ++p;
                 const condition =
-                    b[p] === 0x16 ? call() : b[p] === 0x0e ? value(0) : fail("unsupported condition command token");
+                    b[p] === 0x16
+                        ? b[p + 5] === 0x42
+                            ? qualified()
+                            : call()
+                        : b[p] === 0x0e
+                          ? value(0)
+                          : fail(
+                                b[p] === 0x2d || b[p] === 0x2c
+                                    ? "dynamic condition command name from parameter is not supported"
+                                    : "unsupported condition command token",
+                            );
                 eol();
                 const yes = readBlock(depth + 1, loops, stopAt).body;
                 let no: Statement[] = [],
@@ -501,7 +542,7 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 if (endDestination !== undefined) {
                     if (!ends.has(endDestination)) fail("else jump does not target endif boundary");
                 } else if (!ends.has(destination)) fail("if jump does not target endif boundary");
-                body.push({ kind: "if", offset, condition, yes, no });
+                body.push({ kind: "if", offset, condition, ...(negate ? { negate: true } : {}), yes, no });
                 blockEnds = ends;
                 continue;
             } else if (b[p] === 0x22) {
@@ -516,6 +557,16 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 const n = name();
                 ++p;
                 body.push({ kind: "assign", offset, name: n, value: value(0) });
+            } else if (b[p] === 0x16 && b[p + 5] === 0x42) {
+                // Object-qualified `name:command` statement (token 0x42).
+                body.push(qualified(allowRandomExit));
+            } else if (b[p] === 0x2d || b[p] === 0x2c) {
+                // ExecuteCommand's ReadName also accepts a parameter checksum
+                // (`2d 16 <name>`) or the unnamed spread (`2c`) as the command
+                // name, and a parameter checksum as the object of a `name:`
+                // qualified call. Dynamic dispatch has no static IR name, so
+                // reject it explicitly rather than misreading it.
+                fail("dynamic command name from parameter is not supported");
             } else body.push(call(allowRandomExit));
             const before = p;
             if (b[p] === 0x24 || (allowRandomExit && b[p] === 0x2e)) {

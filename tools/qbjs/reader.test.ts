@@ -6,7 +6,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { command, conditional, field, fixture, integer, name, param, script, word } from "./fixtures.ts";
+import {
+    command,
+    conditional,
+    field,
+    fixture,
+    integer,
+    name,
+    not_,
+    param,
+    qualified,
+    script,
+    word,
+} from "./fixtures.ts";
 import type { Expr } from "./ir.ts";
 import { readIR } from "./reader.ts";
 import { checksum, translate } from "./translate.ts";
@@ -536,4 +548,70 @@ test("CLI writes deterministic IR and preserves input, including same-path/hardl
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+});
+test("if not consumes the 0x39 prefix after the jump target and marks negation", () => {
+    const plain = readIR(module(script("a", conditional(name("Check"), [], [])))).definitions[0]!;
+    const negated = readIR(
+        module(script("a", conditional([...not_, ...name("Check")], [...command("Yes")], [...command("No")]))),
+    ).definitions[0]!;
+    assert.equal(plain.kind, "script");
+    assert.equal(negated.kind, "script");
+    if (plain.kind !== "script" || negated.kind !== "script") throw Error("expected scripts");
+    const plainIf = plain.body[0]!,
+        negatedIf = negated.body[0]!;
+    assert.equal(plainIf.kind, "if");
+    assert.equal(negatedIf.kind, "if");
+    if (plainIf.kind !== "if" || negatedIf.kind !== "if") throw Error("expected ifs");
+    assert.equal(plainIf.negate, undefined);
+    assert.equal(negatedIf.negate, true);
+    assert.equal(negatedIf.condition.kind, "call");
+    assert.equal(negatedIf.yes[0]!.kind, "call");
+    // A bare 0x39 with no following condition command is still malformed.
+    assert.throws(
+        () => readIR(module(script("a", [0x47, 2, 0, 0x39, 0x28, 1]))),
+        /unsupported condition command token/,
+    );
+    assert.throws(
+        () => readIR(module(script("a", [0x47, 2, 0, 0x39, 1, 0x28, 1]))),
+        /unsupported condition command token/,
+    );
+});
+test("object-qualified statements preserve object, command and original offsets", () => {
+    const body = [...qualified("obj", "Do", field("x", integer(1))), ...command("After")];
+    const def = readIR(module(script("a", body))).definitions[0]!;
+    assert.equal(def.kind, "script");
+    if (def.kind !== "script") throw Error("expected script");
+    const first = def.body[0]!;
+    assert.equal(first.kind, "qualified");
+    if (first.kind !== "qualified") throw Error("expected qualified");
+    assert.equal(first.object, checksum("obj"));
+    assert.equal(first.name, checksum("Do"));
+    assert.equal(first.fields.length, 1);
+    // Offsets are module-absolute: the statement starts after the script
+    // header (0x23 + name CRC + EOL = 7 bytes).
+    assert.equal(first.objectOffset, 7);
+    assert.equal(first.commandOffset, 13); // 0x16 + 4-byte CRC, then 0x42
+    assert.equal(first.offset, first.objectOffset);
+    assert.equal((def.body[1] as { kind: string }).kind, "call");
+});
+test("object-qualified if conditions are preserved in IR", () => {
+    const def = readIR(
+        module(script("a", conditional([...name("obj"), 0x42, ...name("Check")], [...command("Yes")], []))),
+    ).definitions[0]!;
+    assert.equal(def.kind, "script");
+    if (def.kind !== "script") throw Error("expected script");
+    const branch = def.body[0]!;
+    assert.equal(branch.kind, "if");
+    if (branch.kind !== "if") throw Error("expected if");
+    assert.equal(branch.condition.kind, "qualified");
+});
+test("dynamic command names from parameters are rejected explicitly", () => {
+    assert.throws(
+        () => readIR(module(script("a", [...param("p"), ...field("f", integer(1)), 1]))),
+        /dynamic command name from parameter/,
+    );
+    assert.throws(
+        () => readIR(module(script("a", conditional([...param("p"), 0x42, ...name("Check")], [], [])))),
+        /dynamic condition command name from parameter/,
+    );
 });

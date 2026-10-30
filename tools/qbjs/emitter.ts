@@ -3,7 +3,7 @@
 
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import type { Call, Expr, Field, ModuleIR, Statement } from "./ir.ts";
+import type { Call, Expr, Field, ModuleIR, QualifiedCall, Statement } from "./ir.ts";
 import { readIR, readIRFile } from "./reader.ts";
 
 export function requiresRandom(module: ModuleIR): boolean {
@@ -73,6 +73,10 @@ export function emitIR(module: ModuleIR): string {
     };
     const call = (x: Call, script: number) =>
         `(yield* qb.call(${x.name}, ${fields(x.fields, script, x.offset)}, p, ${site(script, x.offset)}))`;
+    // Object dispatch is not implemented: fault explicitly at the original
+    // site, never dispatch a global call and never return a stub success.
+    const qualifiedFault = (x: QualifiedCall, script: number): string =>
+        `throw Object.assign(Error(\`QB object-qualified command 0x${x.object.toString(16)}:0x${x.name.toString(16)} requires object dispatch, which is not implemented\`), {site: ${site(script, x.offset)}})`;
     const statements = (
         xs: Statement[],
         script: number,
@@ -85,15 +89,23 @@ export function emitIR(module: ModuleIR): string {
                 switch (x.kind) {
                     case "call":
                         return `${mark}${call(x, script)};\n`;
+                    case "qualified":
+                        return `${mark}${qualifiedFault(x, script)};\n`;
                     case "assign":
                         return `${mark}{ const assigned = ${value(x.value, script)}; if (assigned !== undefined) v.append(p, [[${x.name}, assigned]], ${context}); }\n`;
                     case "return":
                         return `${mark}return root ? v.merge(p, ${fields(x.fields, script, x.offset)}, ${context}) : ${fields(x.fields, script, x.offset)};\n`;
                     case "if": {
-                        const condition =
+                        // CScript::ExecuteIf: the condition command runs exactly
+                        // once (effects and faults preserved) and only then is
+                        // its result negated for a `not` prefix. A QB-script
+                        // condition already counted as true before negation.
+                        if (x.condition.kind === "qualified") return `${mark}${qualifiedFault(x.condition, script)};\n`;
+                        const evaluation =
                             x.condition.kind === "call"
                                 ? call(x.condition, script)
                                 : `v.statementTruth(${value(x.condition, script)}, ${context})`;
+                        const condition = x.negate ? `!(${evaluation})` : evaluation;
                         return `${mark}if (${condition}) {\n${statements(x.yes, script, loops)}} else {\n${statements(x.no, script, loops)}}\n`;
                     }
                     case "loop": {

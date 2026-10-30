@@ -35,6 +35,17 @@ export function conditional(condition: number[], yes: number[], no: number[]): n
     b[endField + 1] = (end - endField) >>> 8;
     return b;
 }
+// `if not <condition>`: the 0x39 token sits between the jump target and the
+// condition command, as CScript::ExecuteIf reads it.
+export const not_ = [0x39];
+// An object-qualified `name:command` statement (token 0x42 after the object name).
+export const qualified = (object: string, commandName: string, args: number[] = []): number[] => [
+    ...name(object),
+    0x42,
+    ...name(commandName),
+    ...args,
+    1,
+];
 export function fixture(): Uint8Array {
     const returned = (s: string, v: number[]) => [0x29, ...field(s, v), 1];
     return Uint8Array.from([
