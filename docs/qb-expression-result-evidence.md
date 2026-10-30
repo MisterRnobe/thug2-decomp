@@ -57,6 +57,12 @@ reference semantics.
 
 ## Current JS gap and required fix
 
+The behavior below was reproduced at `12ea70c`. #29 implements an explicit
+`expressionResult` IR boundary and an iterative owning copy helper, and replaces
+the conflicting live-result expectation. It adds independent grouping/random,
+snapshot/wait, nested-reference and depth/error tests to the public QuickJS
+integration bundle. The original-parser exclusions in this evidence still apply.
+
 A separate synthetic production reader/emitter → embedded QuickJS probe at this
 base saves the all-parameters expression, then adds a new parameter. Its saved
 value remains type 20 and observes the later field. This reproduces the behavior
