@@ -194,6 +194,7 @@ add_library(thug2_code OBJECT
     src/hook/selftests_skater_physics_harness.cpp
     src/hook/selftests_skater_state.cpp
     src/hook/selftests_leftovers.cpp
+    src/hook/selftests_byte_scan.cpp
     src/hook/selftests_skater_feelers.cpp
     src/hook/selftests_skater_turning.cpp
     src/hook/selftests_skater_walls.cpp
@@ -311,6 +312,11 @@ add_library(thug2_code OBJECT
     src/hook/selftests_movie_cfuncs.cpp
     src/hook/selftests_skater_profile_cfuncs.cpp
     src/hook/selftests_appearance_cfuncs.cpp
+    src/hook/selftests_cas3_face.cpp
+    src/hook/selftests_cas3_keys.cpp
+    src/hook/selftests_cas3_options.cpp
+    src/hook/selftests_cas3_lookat.cpp
+    src/hook/selftests_cas3_frames.cpp
     src/hook/selftests_profile_list_cfuncs.cpp
     src/hook/selftests_preload_cfuncs.cpp
     src/hook/selftests_lfxc.cpp
@@ -475,8 +481,15 @@ add_library(thug2_code OBJECT
     src/hook/selftests_rnd3_particle_types.cpp
     src/hook/selftests_rnd3_particle_manager.cpp
     src/hook/selftests_rnd3_model_particles.cpp
+    src/hook/selftests_cas4_appearance.cpp
+    src/hook/selftests_cas4_builder.cpp
+    src/hook/selftests_cas4_bone_volumes.cpp
+    src/hook/selftests_cas4_engine.cpp
     src/hook/selftests_rnd3_primitive.cpp
     src/hook/selftests_rnd3_scene.cpp
+    src/hook/selftests_cas1_timeline.cpp
+    src/hook/selftests_cas1_anim_cache.cpp
+    src/hook/selftests_cas1_channel.cpp
     src/hook/selftests_rnd1_model.cpp
     src/hook/selftests_rnd1_model_geoms.cpp
     src/hook/selftests_rnd1_effects.cpp
@@ -492,6 +505,16 @@ add_library(thug2_code OBJECT
     src/hook/selftests_rnd5_weather.cpp
     src/hook/selftests_rnd5_shadows.cpp
     src/hook/selftests_rnd5_skeleton.cpp
+    src/hook/selftests_cas2_frames.cpp
+    src/hook/selftests_cas2_poses.cpp
+    src/hook/selftests_cas2_track.cpp
+    src/hook/selftests_cas5_scene_list.cpp
+    src/hook/selftests_cas5_text.cpp
+    src/hook/selftests_cas5_geom.cpp
+    src/hook/selftests_cas5_lights.cpp
+    src/hook/selftests_cas5_light_manager.cpp
+    src/hook/selftests_cas5_scene_lights.cpp
+    src/hook/selftests_cas5_mesh.cpp
     src/hook/selftests_pc_particles.cpp
     src/hook/selftests_flexible_particles.cpp
     src/hook/selftests_pc_primitive.cpp
@@ -719,6 +742,8 @@ add_library(thug2_code OBJECT
     src/game/skate/appearance_cfuncs.cpp
     src/game/skate/preload_cfuncs.cpp
     src/game/gfx/anim_controller.cpp
+    src/game/gfx/anim_track.cpp
+    src/game/gfx/boned_anim_frame_data.cpp
     src/game/gfx/screen.cpp
     src/game/gfx/viewport.cpp
     src/game/gfx/weather.cpp
@@ -805,6 +830,10 @@ add_library(thug2_code OBJECT
     src/game/gfx/particle_system_update.cpp
     src/game/gfx/particle_types.cpp
     src/game/gfx/flexible_particle_manager.cpp
+    src/game/gfx/model_appearance.cpp
+    src/game/gfx/model_builder.cpp
+    src/game/gfx/bone_volumes.cpp
+    src/game/gfx/engine.cpp
     src/game/gfx/model_particles.cpp
     src/game/gfx/engine_primitive.cpp
     src/game/gfx/engine_scene.cpp
@@ -817,6 +846,17 @@ add_library(thug2_code OBJECT
     src/game/gfx/engine_texture.cpp
     src/game/gfx/texture_dict.cpp
     src/game/gfx/engine_scene_sectors.cpp
+    src/game/gfx/engine_scene_list.cpp
+    src/game/gfx/frame_source.cpp
+    src/game/gfx/engine_font.cpp
+    src/game/gfx/engine_text.cpp
+    src/game/gfx/engine_geom.cpp
+    src/game/gfx/engine_imposters.cpp
+    src/game/gfx/engine_model_lights.cpp
+    src/game/gfx/light_manager.cpp
+    src/game/gfx/scene_lights.cpp
+    src/game/gfx/engine_mesh.cpp
+    src/game/gfx/loading_bar_cfuncs.cpp
     src/game/gfx/engine_texture_projection.cpp
     src/game/gfx/viewport_list.cpp
     src/game/gfx/engine_effects.cpp
@@ -994,6 +1034,9 @@ add_library(thug2_code OBJECT
     src/game/sfx/mute_audio.cpp
     src/game/sfx/terrain.cpp
     src/game/gfx/anim_blend.cpp
+    src/game/gfx/anim_timeline.cpp
+    src/game/gfx/anim_cache.cpp
+    src/game/gfx/anim_channel.cpp
     src/game/obj/event.cpp
     src/game/obj/flip_rotate.cpp
     src/game/obj/lock_obj.cpp
@@ -1164,6 +1207,13 @@ add_library(thug2_code OBJECT
     src/game/script/game_util_cfuncs.cpp
     src/game/net/hunt_cfuncs.cpp
     src/game/gfx/face_texture_cfuncs.cpp
+    src/game/gfx/face_texture.cpp
+    src/game/gfx/custom_anim_key.cpp
+    src/game/gfx/model_utils.cpp
+    src/game/skate/cas_options.cpp
+    src/game/gfx/bone_look_at.cpp
+    src/game/mth/vector_rotate_z.cpp
+    src/game/gfx/boned_anim_frame_data_pose.cpp
     src/game/gfx/cag_cfuncs.cpp
     src/game/obj/model_swap_cfuncs.cpp
     src/game/front/theme_cfuncs.cpp
@@ -1253,3 +1303,17 @@ target_link_options(thug2_check PRIVATE /DELAYLOAD:SDL2.dll)
 target_compile_options(thug2_check PRIVATE /W4 /permissive- /utf-8)
 # Keep the tool itself away from 0x400000: its child process loads the game image there.
 target_link_options(thug2_check PRIVATE /BASE:0x20000000 /DYNAMICBASE:NO)
+
+# thug2_standalone: the game built from source alone - no hook DLL, no original exe. It doesn't link yet: every
+# GameFunction / GameVariable left, every hook / self-test call from game code and every library not linked yet is an
+# unresolved symbol. Not part of a normal build; `node tools/standalone_report.ts` builds it and sorts what's missing.
+get_target_property(THUG2_CODE_SOURCES thug2_code SOURCES)
+set(THUG2_GAME_SOURCES ${THUG2_CODE_SOURCES})
+list(FILTER THUG2_GAME_SOURCES EXCLUDE REGEX "^src/hook/")
+add_executable(thug2_standalone WIN32 EXCLUDE_FROM_ALL src/standalone/main.cpp ${THUG2_GAME_SOURCES})
+target_compile_definitions(thug2_standalone PRIVATE THUG2_STANDALONE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(thug2_standalone PRIVATE src "${stb_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/generated"
+                                                    "${CMAKE_BINARY_DIR}/editor_fonts")
+add_dependencies(thug2_standalone editor_fonts build_info)
+target_link_libraries(thug2_standalone PRIVATE sdl2 ws2_32 dsound ole32 imgui lzham)
+target_compile_options(thug2_standalone PRIVATE /W3 /permissive- /utf-8)
