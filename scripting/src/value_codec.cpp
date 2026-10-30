@@ -507,6 +507,10 @@ JSValue RichCodec::encode_parameters(const RichParameters& parameters) {
     if (parameters.size() > RichLimits::max_fields)
         throw std::runtime_error("rich codec: field limit");
     impl_.budget = Budget{};
+    // Charge the outer field-name CRCs first, then the field values, so the
+    // parameter list and its decoded form account the same total payload
+    // (decode_parameters charges length * word_bytes for the same names).
+    impl_.budget.payload_bytes(parameters.size() * Impl::word_bytes);
     for (const RichField& field : parameters) impl_.preflight(field.value);
     JSValue array = JS_NewArray(impl_.context);
     if (JS_IsException(array)) {

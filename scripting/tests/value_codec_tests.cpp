@@ -681,10 +681,20 @@ void test_review_double_free_and_sentinel() {
             RichValue::structure({1}, {RichValue::string({'A', 'B', 'C'})})));
         JSMemoryUsage usage{};
         JS_ComputeMemoryUsage(rt.rt, &usage);
-        // Sweep a range of budgets: allocator thresholds vary by platform,
-        // and different budgets fail at different allocation sites.
+        // Positive control first, with an explicit unlimited budget: the same
+        // complex model must encode successfully on every platform.
+        JS_SetMemoryLimit(rt.rt, static_cast<std::size_t>(-1));
+        {
+            JSValue out = codec.encode(v);
+            CHECK(!JS_IsException(out));
+            JS_FreeValue(rt.ctx, out);
+        }
+        // Then sweep finite budgets: allocator thresholds vary by platform,
+        // and different budgets fail at different allocation sites. Only the
+        // failure behavior is asserted here (never a bare sentinel, context
+        // stays usable); a platform may legitimately fail at every swept
+        // budget, so no success is required within this finite window.
         int oom_count = 0;
-        int ok_count = 0;
         for (int extra = 0; extra <= 65536; extra += 4096) {
             JS_SetMemoryLimit(rt.rt, usage.malloc_size + extra);
             JSValue out = codec.encode(v);
@@ -694,17 +704,12 @@ void test_review_double_free_and_sentinel() {
                 JSValue exc = JS_GetException(rt.ctx);
                 JS_FreeValue(rt.ctx, exc);
             } else {
-                ++ok_count;
                 JS_FreeValue(rt.ctx, out);
             }
         }
         // The sweep must actually exercise the failure path somewhere.
         if (oom_count == 0) {
             std::printf("FAIL %s:%d: OOM sweep never failed\n", __FILE__, __LINE__);
-            ++failures;
-        }
-        if (ok_count == 0) {
-            std::printf("FAIL %s:%d: OOM sweep never succeeded\n", __FILE__, __LINE__);
             ++failures;
         }
         JS_SetMemoryLimit(rt.rt, static_cast<std::size_t>(-1));
@@ -871,6 +876,50 @@ void test_review_total_payload() {
         CHECK(!JS_IsException(out));
         JS_FreeValue(rt.ctx, out);
     }
+    // Parameter-list parity (round-3 P2): encode_parameters must charge the
+    // outer field-name CRCs so that its own output decodes. Reviewer repro:
+    // value bytes 16*250000 + 48576*4 = 4194304, plus 2 outer CRC words
+    // = 4194312 > limit. encode_parameters must reject this in preflight;
+    // one scalar fewer must encode AND decode back through the parameter
+    // entry points.
+    {
+        RichValue s = RichValue::string(RichValue::Bytes(250000, 'A'));
+        RichParameters over = {
+            {1, RichValue::array(3, std::vector<RichValue>(16, s))},
+            {2, RichValue::array(1, std::vector<RichValue>(48576, RichValue::integer(7)))},
+        };
+        bool threw = false;
+        try {
+            JSValue out = codec.encode_parameters(over);
+            if (JS_IsException(out)) {
+                std::printf("FAIL %s:%d: bare sentinel for parameter payload\n",
+                            __FILE__, __LINE__);
+                ++failures;
+                JSValue exc = JS_GetException(rt.ctx);
+                JS_FreeValue(rt.ctx, exc);
+            } else {
+                std::printf("FAIL %s:%d: parameter payload over limit accepted\n",
+                            __FILE__, __LINE__);
+                ++failures;
+                JS_FreeValue(rt.ctx, out);
+            }
+        } catch (const std::runtime_error&) { threw = true; }
+        CHECK(threw);
+        CHECK(!JS_HasException(rt.ctx));
+    }
+    {
+        RichValue s = RichValue::string(RichValue::Bytes(250000, 'A'));
+        RichParameters fit = {
+            {1, RichValue::array(3, std::vector<RichValue>(16, s))},
+            {2, RichValue::array(1, std::vector<RichValue>(48574, RichValue::integer(7)))},
+        };
+        JSValue out = codec.encode_parameters(fit);
+        CHECK(!JS_IsException(out));
+        // Parity: the codec's own output must decode without a payload error.
+        RichParameters back = codec.decode_parameters(out);
+        CHECK(back.size() == 2 && back == fit);
+        JS_FreeValue(rt.ctx, out);
+    }
 }
 
 // Review round 2 (P2): encoded output must be immune to prototype setters;
@@ -892,16 +941,31 @@ void test_review_prototype_setters() {
         "  });"
         "}");
     JS_FreeValue(rt.ctx, install);
+    // Cleanup guard: restores Object.prototype after the test. The source
+    // length is derived from the literal itself (never hardcoded), and a
+    // cleanup failure is recorded and the pending exception drained — a
+    // destructor must not throw.
+    static constexpr char cleanup_source[] =
+        "for (const k of ['type','bits','bytes','coordinates','members',"
+        "'elements','elementType']) delete Object.prototype[k];";
     struct Cleanup {
         JSContext* ctx;
+        const char* source;
+        int* failed;
         ~Cleanup() {
-            JSValue cleanup = JS_Eval(ctx,
-                "for (const k of ['type','bits','bytes','coordinates','members',"
-                "'elements','elementType']) delete Object.prototype[k];",
-                155, "<cleanup>", JS_EVAL_TYPE_GLOBAL);
-            JS_FreeValue(ctx, cleanup);
+            const std::size_t length = std::strlen(source);
+            JSValue result = JS_Eval(ctx, source, length, "<cleanup>", JS_EVAL_TYPE_GLOBAL);
+            if (JS_IsException(result) || JS_HasException(ctx)) {
+                std::printf("FAIL %s:%d: prototype cleanup failed\n", __FILE__, __LINE__);
+                ++*failed;
+            }
+            if (JS_HasException(ctx)) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);
+            }
+            JS_FreeValue(ctx, result);
         }
-    } cleanup{rt.ctx};
+    } cleanup{rt.ctx, cleanup_source, &failures};
     // Scalar: bits must be an own data property with the exact value.
     {
         JSValue out = codec.encode(RichValue::integer(123));
