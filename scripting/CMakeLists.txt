@@ -41,6 +41,9 @@ target_include_directories(thug2_js PUBLIC include PRIVATE ${CMAKE_CURRENT_BINAR
 target_link_libraries(thug2_js PRIVATE quickjs_core)
 target_compile_options(thug2_js PRIVATE -Wall -Wextra)
 include(CTest)
+# Rich codec: library sources first, then its test (needs BUILD_TESTING
+# from CTest; see cmake/rich_values.cmake).
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rich_values.cmake)
 if(BUILD_TESTING)
   find_program(NODE_EXECUTABLE node REQUIRED)
   execute_process(COMMAND ${NODE_EXECUTABLE} --version OUTPUT_VARIABLE NODE_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
