@@ -238,6 +238,35 @@ void malformed_boundaries() {
         auto id=vm.startRich(snapshot?1:4);rejects([&]{vm.updateRich(id,0);},"Decode OOM did not escape");
         rejects([&]{vm.startRich(1);},"Decode OOM did not poison Runtime");
     }
+    // UTF-16 -> UTF-8 conversion can allocate after qb.update succeeds. Fill
+    // the bounded engine heap with retained buffers, then observe a prebuilt
+    // wide status string. The same bounded program succeeds with headroom.
+    for(bool bounded:{false,true}) {
+        Runtime vm(bounded?1024*1024:16*1024*1024);
+        vm.load(std::string(minimal)+R"JS(
+            {const old=qb, wide='\u0100'.repeat(65536), held=[];
+             globalThis.qb={...old,update(...a){
+               const r=old.update(...a);r.status=wide;
+               let spent=0;
+               for(let size=65536;size>=256;size/=2) {
+                 while(spent<2*1024*1024) {
+                   try {held.push(new ArrayBuffer(size));spent+=size;}catch {break;}
+                 }
+               }
+               return r;
+             }};}
+        )JS","snapshot-text-oom.js");
+        auto id=vm.startRich(1);
+        if(!bounded)check(vm.updateRich(id,0).status.size()==131072,"Wide snapshot positive control");
+        else {
+            bool text_failed=false;
+            try {(void)vm.updateRich(id,0);}catch(const std::exception& e) {
+                text_failed=std::string(e.what()).find("Cannot read QuickJS string")!=std::string::npos;
+            }
+            check(text_failed,"Wide snapshot did not exercise string-conversion OOM");
+            rejects([&]{vm.startRich(1);},"Snapshot text OOM did not poison Runtime");
+        }
+    }
 }
 }
 int main(int argc,char** argv) { try {

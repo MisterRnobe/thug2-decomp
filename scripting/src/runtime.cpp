@@ -95,7 +95,7 @@ struct Runtime::Impl {
     std::string text(JSValueConst value){
         if(!JS_IsString(value))throw std::runtime_error("Expected QuickJS string");
         std::size_t len=0;const char* p=JS_ToCStringLen(context,&len,value);
-        if(!p){JS_FreeValue(context,JS_GetException(context));throw std::runtime_error("Cannot read QuickJS string");}
+        if(!p){if(updating)fatal=true;JS_FreeValue(context,JS_GetException(context));throw std::runtime_error("Cannot read QuickJS string");}
         CString owned{context,p};return std::string(p,len);
     }
     // Uncaught engine errors during update() bypass the JS scheduler's finally
