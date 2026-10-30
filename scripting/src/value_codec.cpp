@@ -128,10 +128,12 @@ struct RichCodec::Impl {
     // JS_GetOwnProperty, which exposes accessors instead of invoking them,
     // and non-Error values are skipped entirely.
     [[noreturn]] void rethrow_pending(const char* what) {
+        const bool pending = JS_HasException(context);
         JSValue exc = JS_GetException(context); // clears the pending exception
         JSGuard g(context);
         g.hold(exc);
         std::string message(what);
+        bool resource = pending && JS_IsNull(exc);
         if (JS_IsError(context, exc)) {
             JSAtom atom = JS_NewAtom(context, "message");
             if (atom != JS_ATOM_NULL) {
@@ -148,18 +150,27 @@ struct RichCodec::Impl {
                     if (!(desc.flags & JS_PROP_GETSET) && JS_IsString(desc.value)) {
                         const char* utf8 = JS_ToCString(context, desc.value);
                         if (utf8) {
+                            struct CString {
+                                JSContext* ctx; const char* text;
+                                ~CString() { JS_FreeCString(ctx, text); }
+                            } owned{context, utf8};
                             message += ": ";
                             message += utf8;
-                            JS_FreeCString(context, utf8);
+                            resource = message.find("out of memory") != std::string::npos ||
+                                       message.find("stack overflow") != std::string::npos ||
+                                       message.find("interrupted") != std::string::npos;
+                        } else {
+                            resource = true;
                         }
                     }
                 }
+                if (found < 0) resource = true;
                 // found == 0: no message property. found == -1: the descriptor
                 // read itself failed and set a new pending exception; the
                 // public wrappers drain it after this throw propagates.
-            }
+            } else resource = true;
         }
-        fail(message);
+        throw RichCodecError("rich codec: " + message, resource);
     }
     void check_no_pending() {
         if (JS_HasException(context)) rethrow_pending("unexpected pending QuickJS exception");
@@ -504,14 +515,7 @@ JSValue RichCodec::encode(const RichValue& value) {
 }
 
 JSValue RichCodec::encode_parameters(const RichParameters& parameters) {
-    if (parameters.size() > RichLimits::max_fields)
-        throw std::runtime_error("rich codec: field limit");
-    impl_.budget = Budget{};
-    // Charge the outer field-name CRCs first, then the field values, so the
-    // parameter list and its decoded form account the same total payload
-    // (decode_parameters charges length * word_bytes for the same names).
-    impl_.budget.payload_bytes(parameters.size() * Impl::word_bytes);
-    for (const RichField& field : parameters) impl_.preflight(field.value);
+    validate_parameters(parameters);
     JSValue array = JS_NewArray(impl_.context);
     if (JS_IsException(array)) {
         impl_.ensure_pending("quickjs allocation failed during encode");
@@ -531,6 +535,17 @@ JSValue RichCodec::encode_parameters(const RichParameters& parameters) {
         }
     }
     return g.release();
+}
+
+void RichCodec::validate_parameters(const RichParameters& parameters) {
+    if (parameters.size() > RichLimits::max_fields)
+        throw std::runtime_error("rich codec: field limit");
+    impl_.budget = Budget{};
+    // Charge the outer field-name CRCs first, then the field values, so the
+    // parameter list and its decoded form account the same total payload
+    // (decode_parameters charges length * word_bytes for the same names).
+    impl_.budget.payload_bytes(parameters.size() * Impl::word_bytes);
+    for (const RichField& field : parameters) impl_.preflight(field.value);
 }
 
 RichValue RichCodec::decode(JSValueConst value) {

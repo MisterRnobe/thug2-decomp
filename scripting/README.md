@@ -99,9 +99,35 @@ starts tasks, updates them at explicit frames and cancels retained tasks.
 transport parameters and output fields. A host returns a condition and optional
 fields/frame wait. Unknown commands fault with the original QB source site.
 Hosts must return; JS interrupt limits cannot preempt C++ callbacks.
-Containers can execute inside format-2 JS, but the native host/input/snapshot
-bridge remains scalar-only. Crossing that boundary with rich values explicitly
-fails; it never silently flattens or drops fields.
+The original methods retain their scalar-only contract. `bindRich`, `startRich`
+and `updateRich` add an owning by-value bridge using `RichValue`, ordered
+`RichParameters`, `RichHostResult` and `RichSnapshot`. It transports Integer,
+Float and Name bits, raw String/LocalString bytes, Pair/Vector words, ordered
+Structures and homogeneous Arrays through the shared rich codec. Live reference
+tags 20/21 reject explicitly, including inside containers. Returned models and
+callback arguments can be retained after cancellation or Runtime destruction;
+no public model carries a QuickJS handle.
+
+Each task keeps the transport mode selected by its start method. Update it with
+the matching method; a wrong-mode or unknown native task rejects before running
+JS or advancing the frame. IDs created directly by JS are not native tasks.
+Both task modes may coexist, but a task can invoke only hosts registered in its
+own mode. Each checksum has one host slot: the most recent `bind` or `bindRich`
+replaces either earlier registration. `installRichFrameWait()` installs the rich
+equivalent of `install_frame_wait()` in that same Wait slot. Transport mode does
+not change the QB module format: format 1 still accepts only scalar values, and
+format 2 requires loading `values.js`. Typed merge, defaults, callee-local
+isolation and returned-field semantics remain implemented by the JS runtime.
+
+Rich transfers enforce the codec limits: depth 128, 250,000 total value nodes,
+4,096 fields per structure/parameter list, 250,000 elements per array or bytes
+per string, and 4 MiB total payload including name CRCs. Invalid native inputs
+reject before creating a task. Invalid host outputs or ordinary decoder errors
+produce task faults (snapshot decoding errors throw to C++); the Runtime remains
+usable. Native input allocation failure also permits reuse. Host/snapshot native
+allocation failure, interrupt exhaustion and QuickJS OOM during host output or
+boundary decoding make the Runtime terminal. Codec diagnostics retain resource
+failure metadata after draining the engine exception.
 
 Load all modules before starting tasks. Defaults initialize on the first update.
 Retained tasks, including finished/faulted ones, must be canceled to release
@@ -121,9 +147,9 @@ normal QB/host faults. Loading is not transactional, even for recoverable errors
 
 ## Validation and provenance
 
-Four public CTest suites run all `tools/qbjs/*.test.ts` tests, the legacy
+Six public CTest suites run all `tools/qbjs/*.test.ts` tests, the rich value codec, the legacy
 16-script scalar C++ bridge regression, QuickJS value/generator/scheduler
-assertions, and a separate native format-2 integration driver. They check malformed/truncated input, jump
+assertions, a native format-2 integration driver and the rich native bridge. They check malformed/truncated input, jump
 targets, deterministic code, typed bits, calls/defaults/returns, isolation,
 spread, both host-condition branches, QB-call conditions, frame waits, duplicate
 frame updates, host errors, source offsets, fuel, recursion, cancellation,
@@ -134,7 +160,7 @@ The CI matrix also builds these public targets on Linux, Intel macOS and Windows
 GCC; results of earlier bridge checks do not establish the expanded suites' outcomes.
 
 No original game file or EXE is needed for public tests. To enable the optional
-fifth CTest suite using your local English game data:
+additional CTest suite using your local English game data:
 
 ```sh
 cmake -S scripting -B work/qb-js-build -DQB_GAME_DATA_DIR="/path/to/Game/Data"
