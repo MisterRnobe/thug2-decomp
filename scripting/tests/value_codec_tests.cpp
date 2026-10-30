@@ -647,6 +647,173 @@ void test_limits() {
         CHECK(threw);
     }
 }
+
+// --- review regressions (issue #21 review round 1) ---------------------------
+// Every failure must leave a reusable context: no stale pending exception.
+#define CHECK_DECODE_FAILS(code, needle) do { \
+    JSValue owned_ = eval(rt.ctx, (code)); \
+    bool threw_ = false; \
+    try { (void)codec.decode(owned_); } catch (const std::runtime_error& e) { \
+        threw_ = true; \
+        if (std::strstr(e.what(), (needle)) == nullptr) { \
+            std::printf("FAIL %s:%d: message '%s' lacks '%s'\n", __FILE__, __LINE__, e.what(), needle); \
+            ++failures; \
+        } \
+    } \
+    if (!threw_) { std::printf("FAIL %s:%d: no throw: %s\n", __FILE__, __LINE__, (code)); ++failures; } \
+    if (JS_HasException(rt.ctx)) { \
+        std::printf("FAIL %s:%d: stale pending exception after: %s\n", __FILE__, __LINE__, (code)); \
+        ++failures; \
+        JSValue exc_ = JS_GetException(rt.ctx); \
+        JS_FreeValue(rt.ctx, exc_); \
+    } \
+    JS_FreeValue(rt.ctx, owned_); \
+} while (0)
+
+void test_review_double_free_and_sentinel() {
+    Runtime rt;
+    RichCodec codec(rt.ctx);
+    // P1-1: a consuming property op failing under memory pressure must not
+    // double free; the failure must surface (JS_EXCEPTION + pending, or a
+    // C++ throw), and the context must stay usable.
+    {
+        RichValue v = RichValue::array(10, std::vector<RichValue>(100,
+            RichValue::structure({1}, {RichValue::string({'A', 'B', 'C'})})));
+        JSMemoryUsage usage{};
+        JS_ComputeMemoryUsage(rt.rt, &usage);
+        // Sweep a range of budgets: allocator thresholds vary by platform,
+        // and different budgets fail at different allocation sites.
+        int oom_count = 0;
+        int ok_count = 0;
+        for (int extra = 0; extra <= 65536; extra += 4096) {
+            JS_SetMemoryLimit(rt.rt, usage.malloc_size + extra);
+            JSValue out = codec.encode(v);
+            if (JS_IsException(out)) {
+                ++oom_count;
+                CHECK(JS_HasException(rt.ctx)); // never a bare sentinel
+                JSValue exc = JS_GetException(rt.ctx);
+                JS_FreeValue(rt.ctx, exc);
+            } else {
+                ++ok_count;
+                JS_FreeValue(rt.ctx, out);
+            }
+        }
+        // The sweep must actually exercise the failure path somewhere.
+        if (oom_count == 0) {
+            std::printf("FAIL %s:%d: OOM sweep never failed\n", __FILE__, __LINE__);
+            ++failures;
+        }
+        if (ok_count == 0) {
+            std::printf("FAIL %s:%d: OOM sweep never succeeded\n", __FILE__, __LINE__);
+            ++failures;
+        }
+        JS_SetMemoryLimit(rt.rt, static_cast<std::size_t>(-1));
+        // Context still usable after the OOM sweep.
+        JSValue ok = codec.encode(RichValue::integer(7));
+        CHECK(!JS_IsException(ok));
+        CHECK(num(rt.ctx, ok, "bits") == 7);
+        JS_FreeValue(rt.ctx, ok);
+    }
+    // P1-2: depth-limit encode must throw a C++ runtime_error (model
+    // preflight), not return a bare JS_EXCEPTION.
+    {
+        RichValue deep = RichValue::array(0, {});
+        for (int i = 0; i < 129; ++i) deep = RichValue::array(12, {deep});
+        bool threw = false;
+        try {
+            JSValue out = codec.encode(deep);
+            if (JS_IsException(out)) {
+                std::printf("FAIL %s:%d: bare sentinel for model limit\n", __FILE__, __LINE__);
+                ++failures;
+                JSValue exc = JS_GetException(rt.ctx);
+                JS_FreeValue(rt.ctx, exc);
+            }
+            JS_FreeValue(rt.ctx, out);
+        } catch (const std::runtime_error&) { threw = true; }
+        CHECK(threw);
+        CHECK(!JS_HasException(rt.ctx));
+    }
+    // P1-2: node-limit and payload-limit encode throw before any JS work.
+    {
+        bool threw = false;
+        try {
+            std::vector<RichValue> elements;
+            elements.reserve(300000);
+            for (int i = 0; i < 300000; ++i)
+                elements.push_back(RichValue::integer(i));
+            RichValue big = RichValue::array(1, std::move(elements));
+            JSValue out = codec.encode(big);
+            if (JS_IsException(out)) {
+                std::printf("FAIL %s:%d: bare sentinel for node limit\n", __FILE__, __LINE__);
+                ++failures;
+                JSValue exc = JS_GetException(rt.ctx);
+                JS_FreeValue(rt.ctx, exc);
+            }
+            JS_FreeValue(rt.ctx, out);
+        } catch (const std::runtime_error&) { threw = true; }
+        CHECK(threw);
+        CHECK(!JS_HasException(rt.ctx));
+    }
+}
+
+void test_review_decode_context_poisoning() {
+    Runtime rt;
+    RichCodec codec(rt.ctx);
+    // P1-3: element getter throwing inside bytes; must throw C++ AND clear.
+    CHECK_DECODE_FAILS(
+        "(()=>{ const b=[65]; Object.defineProperty(b,'0',{"
+        "get(){throw Error('element boom')}}); return {type:3,bytes:b}; })()",
+        "element boom");
+    // P1-3: exception whose own message getter throws; diagnostics must not
+    // run user getters, and the context must end clean.
+    CHECK_DECODE_FAILS(
+        "({type:1,get bits(){ const e=Error('outer');"
+        "Object.defineProperty(e,'message',{get(){throw Error('inner')}}); throw e; }})",
+        "bits");
+    // P1-3: revoked proxy passed as bytes; JS_IsArray returns -1, not 0.
+    CHECK_DECODE_FAILS(
+        "(()=>{ const p=Proxy.revocable([],{}); p.revoke();"
+        "return {type:3,bytes:p.proxy}; })()",
+        "array check");
+    // decode_parameters variants of the same failure classes.
+    {
+        JSValue v = eval(rt.ctx,
+            "[[1, (()=>{ const b=[65]; Object.defineProperty(b,'0',{"
+            "get(){throw Error('param element boom')}}); return {type:3,bytes:b}; })()]]");
+        bool threw = false;
+        try { (void)codec.decode_parameters(v); }
+        catch (const std::runtime_error& e) {
+            threw = true;
+            if (std::strstr(e.what(), "param element boom") == nullptr) {
+                std::printf("FAIL %s:%d: message '%s' lacks 'param element boom'\n",
+                            __FILE__, __LINE__, e.what());
+                ++failures;
+            }
+        }
+        if (!threw) { std::printf("FAIL %s:%d: no throw\n", __FILE__, __LINE__); ++failures; }
+        CHECK(!JS_HasException(rt.ctx));
+        JS_FreeValue(rt.ctx, v);
+    }
+    {
+        JSValue v = eval(rt.ctx,
+            "[[1, (()=>{ const p=Proxy.revocable([],{}); p.revoke();"
+            "return {type:3,bytes:p.proxy}; })()]]");
+        bool threw = false;
+        try { (void)codec.decode_parameters(v); }
+        catch (const std::runtime_error&) { threw = true; }
+        if (!threw) { std::printf("FAIL %s:%d: no throw\n", __FILE__, __LINE__); ++failures; }
+        CHECK(!JS_HasException(rt.ctx));
+        JS_FreeValue(rt.ctx, v);
+    }
+    // Context still fully usable after all the failures above.
+    for (int i = 0; i < 3; ++i) {
+        JSValue ok = codec.encode(RichValue::name(77));
+        CHECK(!JS_IsException(ok));
+        RichValue back = codec.decode(ok);
+        CHECK(back.type() == 13 && back.bits() == 77);
+        JS_FreeValue(rt.ctx, ok);
+    }
+}
 } // namespace
 
 int main() {
@@ -664,6 +831,8 @@ int main() {
     test_round_trip();
     test_model_negatives();
     test_decode_negatives();
+    test_review_double_free_and_sentinel();
+    test_review_decode_context_poisoning();
     test_recovery_and_reuse();
     test_limits();
     if (failures == 0) {
