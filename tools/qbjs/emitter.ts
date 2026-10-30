@@ -123,11 +123,8 @@ export function emitIR(module: ModuleIR): string {
                     }
                     case "random": {
                         const clauses = x.branches
-                            .map(
-                                (branch, i) =>
-                                    `${i === 0 ? "if" : "else if"} (branch === ${i}) {\n${statements(branch, script, loops)}}`,
-                            )
-                            .join(" ");
+                            .map((branch, i) => `if (branch === ${i}) {\n${statements(branch, script, loops)}}`)
+                            .join("\n");
                         return `${mark}{ const branch = randomBranch(${x.opcode}, ${site(script, x.offset)}, ${JSON.stringify(x.weights)});\n${clauses}\n}\n`;
                     }
                 }

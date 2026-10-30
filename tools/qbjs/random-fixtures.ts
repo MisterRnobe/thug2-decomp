@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { emitIR } from "./emitter.ts";
 import { command, field, integer, param, script, word } from "./fixtures.ts";
+import { randomControlAssertions, randomControlFixture, randomMaxBranchesFixture } from "./random-control-fixtures.ts";
 import { readIR } from "./reader.ts";
 import { checksum } from "./translate.ts";
 
@@ -108,5 +109,5 @@ assert(run(${key("randomStatement")}).bits===42,'statement random executes selec
 ref.choose(0x2f,sites[${key("randomStatement")}],[1,0],1);same();
 assert(captured[2][0][0]===${key("picked")} && captured[2][0][1].bits===1,'statement random host call');
 } finally {globalThis.__qbHost=saved;}
-})();\n`;
+})();\n${randomControlFixture().javascript}${randomMaxBranchesFixture().javascript}${randomControlAssertions()}`;
 }

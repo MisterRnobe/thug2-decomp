@@ -313,10 +313,55 @@ export function randomControlFixture() {
     return { input, ir, javascript: emitIR(ir), sites, choiceSites };
 }
 
+export function randomMaxBranchesFixture() {
+    const emitTag = (tag: number) => command("RecordStep", field("tag", integer(tag)));
+    const firstWeights = Array.from({ length: 4096 }, (_, i) => (i === 0 ? 1 : 0));
+    const lastWeights = Array.from({ length: 4096 }, (_, i) => (i === 4095 ? 1 : 0));
+    const firstBranches = Array.from({ length: 4096 }, (_, i) =>
+        i === 0
+            ? [
+                  ...randomBlock(0x2f, [emitTag(9000), command("NeverCalledMaxInner")], [1, 0]),
+                  ...assignLine("picked", integer(1000)),
+              ]
+            : i === 4095
+              ? command("NeverCalledMaxLast")
+              : [],
+    );
+    const lastBranches = Array.from({ length: 4096 }, (_, i) =>
+        i === 0
+            ? command("NeverCalledMaxFirst")
+            : i === 4095
+              ? [...emitTag(9095), ...assignLine("picked", integer(4095))]
+              : [],
+    );
+    const input = Uint8Array.from([
+        ...script("maxBranchesFirst", randomBlock(0x2f, firstBranches, firstWeights)),
+        ...script(
+            "maxBranchesLast",
+            randomBlock(0x37, lastBranches, lastWeights, { omitLastJump: true, joinEols: [1] }),
+        ),
+        0,
+    ]);
+    const ir = readIR(input, "random-max-branches.qb");
+    const sites: Record<string, { source: string; script: number; offset: number }[]> = {};
+    for (const def of ir.definitions) {
+        if (def.kind === "script" && def.body[0]?.kind === "random") {
+            const list = [{ source: ir.source, script: def.name, offset: def.body[0].offset }];
+            const firstStmt = def.body[0].branches[0]?.[0];
+            if (firstStmt?.kind === "random") {
+                list.push({ source: ir.source, script: def.name, offset: firstStmt.offset });
+            }
+            sites[String(def.name)] = list;
+        }
+    }
+    return { input, ir, javascript: emitIR(ir), sites, firstWeights, lastWeights };
+}
+
 export function randomControlAssertions(): string {
     const key = checksum,
         fixture = randomControlFixture(),
-        sites = JSON.stringify(fixture.sites),
+        maxFixture = randomMaxBranchesFixture(),
+        sites = JSON.stringify({ ...fixture.sites, ...maxFixture.sites }),
         choiceSites = JSON.stringify(fixture.choiceSites);
     return `(() => {
 const savedHost = globalThis.__qbHost;
@@ -580,6 +625,33 @@ reset(55);
     assert(JSON.stringify(rng.state(0)) === before0 && JSON.stringify(rng.state(1)) === before1, 'fuel failure does not advance RNG');
 }
 
+// 10. Max-branch (4096) flat-dispatch regression: forced first (index 0) and last (index 4095) selections.
+reset(777);
+{
+    const wFirst = Array.from({ length: 4096 }, (_, i) => (i === 0 ? 1 : 0));
+    const wLast = Array.from({ length: 4096 }, (_, i) => (i === 4095 ? 1 : 0));
+
+    const idFirst = qb.start(${key("maxBranchesFirst")}, [], 100000);
+    r = qb.update(idFirst, ++frameCounter);
+    qb.cancel(idFirst);
+    ref.choose(0x2f, sites[${key("maxBranchesFirst")}][0], wFirst, idFirst);
+    ref.choose(0x2f, sites[${key("maxBranchesFirst")}][1], [1, 0], idFirst);
+    assert(r.status === 'finished', r.message);
+    assert(events.join(',') === '9000', 'maxBranchesFirst forced index 0');
+    assert(get(r.parameters, ${key("picked")})?.bits === 1000, 'maxBranchesFirst state');
+    sameStreams('maxBranchesFirst');
+
+    events.length = 0;
+    const idLast = qb.start(${key("maxBranchesLast")}, [], 100000);
+    r = qb.update(idLast, ++frameCounter);
+    qb.cancel(idLast);
+    ref.choose(0x37, sites[${key("maxBranchesLast")}][0], wLast, idLast);
+    assert(r.status === 'finished', r.message);
+    assert(events.join(',') === '9095', 'maxBranchesLast forced index 4095');
+    assert(get(r.parameters, ${key("picked")})?.bits === 4095, 'maxBranchesLast state');
+    sameStreams('maxBranchesLast');
+}
+
 globalThis.qbRandomControlTestResult = { completed: true, assertions };
 } finally { globalThis.__qbHost = savedHost; }
 })();\n`;
@@ -590,6 +662,7 @@ export function randomControlBundle(): string {
         randomSource() +
         nativeRuntimeBundle() +
         randomControlFixture().javascript +
+        randomMaxBranchesFixture().javascript +
         randomControlAssertions() +
         '\nif (globalThis.qbRandomControlTestResult?.completed !== true) throw Error("Random control assertions did not complete");\n' +
         "globalThis.qbIntegrationTestResult = { completed: true, randomControl: globalThis.qbRandomControlTestResult.assertions };\n"

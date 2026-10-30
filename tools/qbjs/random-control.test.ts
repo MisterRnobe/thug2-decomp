@@ -10,6 +10,7 @@ import {
     randomBlock,
     randomControlBundle,
     randomControlFixture,
+    randomMaxBranchesFixture,
     switchBlock,
 } from "./random-control-fixtures.ts";
 import { readIR } from "./reader.ts";
@@ -31,6 +32,11 @@ test("statement random IR and emitted JS are deterministic and set requires.rand
     assert.equal(first.javascript, second.javascript);
     assert.equal(requiresRandom(first.ir), true);
     assert.match(first.javascript, /"random":1/);
+
+    const maxBranches = randomMaxBranchesFixture();
+    assert.equal(maxBranches.ir.definitions.length, 2);
+    assert.doesNotMatch(maxBranches.javascript, /else if \(branch ===/);
+    assert.match(maxBranches.javascript, /if \(branch === 4095\)/);
 
     // A module with only a statement-level random block (no value randomRange/randomChoice) still requires random:1.
     const stmtOnlyIR = readIR(wrapScript(randomBlock(0x2f, [command("A"), command("B")], [1, 1])), "stmt-only.qb");
