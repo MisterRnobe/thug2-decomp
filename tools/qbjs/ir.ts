@@ -31,7 +31,8 @@ export type Statement =
           cases: { labels: SwitchLabel[]; body: Statement[] }[];
           fallback?: Statement[];
       }
-    | { kind: "if"; offset: number; condition: Call | Expr; yes: Statement[]; no: Statement[] };
+    | { kind: "if"; offset: number; condition: Call | Expr; yes: Statement[]; no: Statement[] }
+    | { kind: "random"; offset: number; opcode: number; weights: number[]; branches: Statement[][] };
 export type Definition =
     | { kind: "script"; offset: number; name: number; defaults: Field[]; body: Statement[] }
     | { kind: "global"; offset: number; name: number; value: Expr };

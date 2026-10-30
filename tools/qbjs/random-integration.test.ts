@@ -26,6 +26,12 @@ test("reader validates random targets, join jumps and every truncation", () => {
         bad[index] = (bad[index]! + 1) & 255;
         assert.throws(() => readIR(mod(bad)), /random/);
     }
+    const backward = [...branch];
+    backward.splice(9, 4, ...word(0xfffffff0));
+    assert.throws(() => readIR(mod(backward)), /random target cannot jump backwards/);
+    const outOfBounds = [...branch];
+    outOfBounds.splice(9, 4, ...word(0x10000));
+    assert.throws(() => readIR(mod(outOfBounds)), /random target exceeds module bounds/);
     assert.throws(() => readIR(mod([0x2f, ...word(4097)])), /count/);
     assert.throws(() => readIR(mod(randomChoice(0x2f, [integer(1)], [0]))), /unsafe weighted/);
     assert.throws(() => readIR(mod([5, ...branch, 6])), /literal-array/);

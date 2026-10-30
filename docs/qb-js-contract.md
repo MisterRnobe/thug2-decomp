@@ -420,15 +420,21 @@ Array construction calls this same instance during both sizing and population.
 The module does not itself schedule generators or choose a JS array literal's
 inference/population paths. NaN/Inf and unsupported unsafe cases fail explicitly.
 
-The reader/emitter currently supports raw Range tokens 0x30/0x38 in value
+The reader/emitter supports raw Range tokens 0x30/0x38 in value
 positions (0x30 only inside expressions, matching the original operand switch).
 It preserves float32 endpoint bits. Weighted/NoRepeat/Permute value tables
-0x2f/0x37/0x40/0x41 use `randomChoice` IR with weights and lazy alternatives.
-The initial subset requires contiguous, ordered alternatives containing one
-value each, and validates their relative targets and common join jumps before
-emission. Tables are capped at 4096 values (Permute at 2..66). Random command
-blocks and random array construction still reject; they are not flattened into
-this single-value model. Stored random choices in defaults/globals also reject.
+0x2f/0x37/0x40/0x41 use `randomChoice` IR with weights and lazy alternatives,
+while structured statement-level random blocks use
+`{kind:"random",offset,opcode,weights,branches:Statement[][]}`.
+Both value and statement tables require contiguous, ordered alternatives,
+validate relative branch targets and common 0x2e join jumps (allowing the final
+branch of a multi-branch statement table to terminate directly at the validated
+join boundary or with an explicit 0x2e jump), and cap tables at 4096 branches
+(Permute at 2..66). Only the selected statement branch executes; branches may
+contain multiple statements, calls, returns, frame waits, if/switch/loop blocks,
+breaks targeting enclosing loops, and nested random blocks or value choices.
+Random array construction still rejects explicitly until two-pass array
+evaluation is added. Stored random choices in defaults/globals also reject.
 
 Generated manifests require `{values:2,random:1}` only when random IR is
 present. The runtime rejects a missing/wrong helper before registration. The

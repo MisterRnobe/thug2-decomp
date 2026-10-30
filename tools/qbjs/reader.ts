@@ -1,6 +1,6 @@
 // NOT ORIGINAL - bounded QB -> format-2 IR reader, phase one of issue #3.
 // References: script/qb.*, load.cpp and parse.cpp. Does not evaluate or emit JS.
-// Statement random branches, random arrays, section markers and cached pointers
+// Random arrays, section markers and cached pointers
 // still reject explicitly. Existing format-1 translate.ts is unchanged.
 // This reads raw token streams, not the separate PC precompiled-image format.
 import { closeSync, existsSync, fstatSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
@@ -55,9 +55,9 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
         if (op === 2) word();
         else if (op !== 1) fail("expected end of line");
     };
-    const lines = (): Set<number> => {
+    const lines = (stopAt?: number): Set<number> => {
         const positions = new Set([p]);
-        while (b[p] === 1 || b[p] === 2) {
+        while ((stopAt === undefined || p < stopAt) && (b[p] === 1 || b[p] === 2)) {
             eol();
             positions.add(p);
         }
@@ -69,9 +69,14 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
             else eol();
         }
     };
-    const endLine = () => {
-        if (b[p] !== 0x24) eol();
-        lines();
+    const longTarget = (label: string, stopAt?: number): number => {
+        const field = p,
+            delta = word();
+        if (delta >= 0x80000000) fail(`${label} cannot jump backwards`);
+        const target = field + 4 + delta;
+        if (target > b.length) fail(`${label} exceeds module bounds`);
+        if (stopAt !== undefined && target > stopAt) fail(`${label} crosses enclosing block boundary`);
+        return target;
     };
     const heights = new WeakMap<Expr, number>();
     const bounded = (v: Expr): Expr => {
@@ -192,10 +197,7 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
             const weights = Array.from({ length: count }, () => short());
             if ((op === 0x2f || op === 0x37) && (weights.some((w) => w >= 0x8000) || weights.every((w) => w === 0)))
                 fail("unsafe weighted random value table");
-            const targets = Array.from({ length: count }, () => {
-                const field = p;
-                return field + 4 + word();
-            });
+            const targets = Array.from({ length: count }, () => longTarget("random target"));
             const choices: Expr[] = [],
                 ends: number[] = [];
             for (let i = 0; i < count; i++) {
@@ -203,8 +205,7 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 choices.push(value(depth + 1, inExpression, rawName));
                 if (b[p] === 0x2e) {
                     ++p;
-                    const field = p;
-                    ends.push(field + 4 + word());
+                    ends.push(longTarget("random value jump"));
                 } else if (i < count - 1) fail("random value branch requires join jump");
             }
             if (ends.some((end) => end !== p)) fail("random value jump does not target join boundary");
@@ -271,11 +272,13 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
         }
         return fail(`unsupported value token 0x${op.toString(16)}`);
     };
-    const parameters = (depth: number, structure = false): Field[] => {
+    const parameters = (depth: number, structure = false, allowRandomExit = false): Field[] => {
         if (depth > depthLimit) fail("value depth limit");
         const fields: Field[] = [];
         if (structure) separators();
-        while (structure ? b[p] !== 4 : b[p] !== 1 && b[p] !== 2 && b[p] !== 0x24) {
+        while (
+            structure ? b[p] !== 4 : b[p] !== 1 && b[p] !== 2 && b[p] !== 0x24 && (!allowRandomExit || b[p] !== 0x2e)
+        ) {
             need(1);
             if (b[p] === 9) {
                 ++p;
@@ -342,24 +345,82 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
             else check(f.value);
         }
     };
-    const call = (): Call => {
+    const call = (allowRandomExit = false): Call => {
         const offset = p,
             n = name();
-        return { kind: "call", offset, name: n, fields: parameters(0) };
+        return { kind: "call", offset, name: n, fields: parameters(0, false, allowRandomExit) };
     };
-    const block = (depth: number, loops: number[] = []): Statement[] => {
+    const readBlock = (
+        depth: number,
+        loops: number[] = [],
+        stopAt?: number,
+        allowRandomExit = false,
+    ): { body: Statement[]; ends: Set<number>; unterminatedLine: boolean } => {
         if (depth > 64) fail("statement nesting limit");
         const body: Statement[] = [];
-        lines();
-        while (![0x21, 0x24, 0x28, 0x3d, 0x3e, 0x3f, 0x48, 0x49].includes(b[p]!)) {
+        let blockEnds = lines(stopAt),
+            unterminatedLine = false;
+        while (
+            (stopAt === undefined || p < stopAt) &&
+            ![0x21, 0x24, 0x28, 0x3d, 0x3e, 0x3f, 0x48, 0x49].includes(b[p]!) &&
+            (!allowRandomExit || b[p] !== 0x2e)
+        ) {
             need(1);
+            if (b[p] === 0x2e) fail("unexpected random jump token 0x2e");
             node();
             const offset = p;
+            unterminatedLine = false;
+            if ([0x2f, 0x37, 0x40, 0x41].includes(b[p]!)) {
+                const op = byte(),
+                    count = word();
+                if (count < 1 || count > 4096) fail("random branch count must be 1..4096");
+                if (op === 0x41 && (count < 2 || count > 66)) fail("RandomPermute requires 2..66 choices");
+                const weights = Array.from({ length: count }, () => short());
+                if ((op === 0x2f || op === 0x37) && (weights.some((w) => w >= 0x8000) || weights.every((w) => w === 0)))
+                    fail("unsafe weighted random table");
+                const targets = Array.from({ length: count }, () => longTarget("random target", stopAt));
+                const branches: Statement[][] = [],
+                    ends: number[] = [];
+                let joins = new Set<number>(),
+                    needsJoinEol = false;
+                for (let i = 0; i < count; i++) {
+                    const starts = lines(stopAt);
+                    if (!starts.has(targets[i]!)) fail("random target does not match branch boundary");
+                    if (ends.length && ends[0]! <= p) fail("random branch jump does not target join boundary");
+                    const branchStop = i === count - 1 ? ends[0] : targets[i + 1]! > p ? targets[i + 1] : stopAt;
+                    const branch = readBlock(depth + 1, loops, branchStop, true);
+                    branches.push(branch.body);
+                    if (b[p] === 0x2e) {
+                        if (branch.unterminatedLine) needsJoinEol = true;
+                        ++p;
+                        const end = longTarget("random branch jump", stopAt);
+                        if (end < p) fail("random branch jump does not target join boundary");
+                        if (ends.length && end !== ends[0]) fail("random branches do not share a common join target");
+                        ends.push(end);
+                        if (i === count - 1) {
+                            const endOffset = p;
+                            joins = lines(stopAt);
+                            if (needsJoinEol && joins.size === 1 && b[endOffset] !== 0x24) joins.clear();
+                        }
+                    } else if (i < count - 1 || ends.length === 0) {
+                        fail("random branch requires join jump");
+                    } else {
+                        joins = branch.ends;
+                        if (needsJoinEol && b[ends[0]!] !== 1 && b[ends[0]!] !== 2 && b[ends[0]!] !== 0x24)
+                            fail("random branch jump requires end-of-line at join boundary");
+                    }
+                }
+                if (!joins.has(ends[0]!)) fail("random branch jump does not target join boundary");
+                for (const pos of lines(stopAt)) joins.add(pos);
+                body.push({ kind: "random", offset, opcode: op, weights, branches });
+                blockEnds = joins;
+                continue;
+            }
             if (b[p] === 0x3c) {
                 ++p;
                 const fields = parameters(0);
                 eol();
-                lines();
+                lines(stopAt);
                 const cases: { labels: SwitchLabel[]; body: Statement[] }[] = [];
                 const exits: number[] = [];
                 let labels: SwitchLabel[] = [];
@@ -370,14 +431,14 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                     const next = p + short();
                     labels.push({ offset: labelOffset, fields: parameters(0) });
                     eol();
-                    lines();
-                    const branch = block(depth + 1, loops);
+                    lines(stopAt);
+                    const branch = readBlock(depth + 1, loops, stopAt).body;
                     if (byte() !== 0x49) fail("expected case exit jump");
                     exits.push(p + short());
                     // Only an immediate next case after an empty body is a
                     // grouped label. Its arguments still parse after a match.
                     const grouped = branch.length === 0 && b[p] === 0x3e;
-                    lines();
+                    lines(stopAt);
                     if (next !== p || ![0x3e, 0x3f, 0x3d].includes(b[p]!))
                         fail("case jump does not target next label/endswitch boundary");
                     if (!grouped) {
@@ -391,27 +452,25 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                     ++p;
                     if (byte() !== 0x49) fail("expected compiled default jump");
                     exits.push(p + short());
-                    fallback = block(depth + 1, loops);
+                    fallback = readBlock(depth + 1, loops, stopAt).body;
                 }
                 const end = p;
                 if (byte() !== 0x3d) fail("expected endswitch (pre-case statements are unsupported)");
                 if (exits.some((destination) => destination !== end)) fail("case exit does not target endswitch");
                 body.push({ kind: "switch", offset, fields, cases, ...(fallback === undefined ? {} : { fallback }) });
-                lines();
+                blockEnds = lines(stopAt);
+                blockEnds.add(end);
                 continue;
             }
             if (b[p] === 0x20) {
                 if (loops.length >= 10) fail("loop nesting exceeds original loop storage");
                 ++p;
-                const nested = block(depth + 1, [...loops, offset]);
+                const nested = readBlock(depth + 1, [...loops, offset], stopAt).body;
                 const repeatOffset = p;
                 if (byte() !== 0x21) fail("expected repeat for begin");
-                const repeatFields = parameters(0);
+                const repeatFields = parameters(0, false, allowRandomExit);
                 body.push({ kind: "loop", offset, body: nested, repeatOffset, repeatFields });
-                endLine();
-                continue;
-            }
-            if (b[p] === 0x47) {
+            } else if (b[p] === 0x47) {
                 ++p;
                 const destination = p + short();
                 const condition =
@@ -421,44 +480,53 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                           ? value(0, true)
                           : fail("unsupported condition command token");
                 eol();
-                const yes = block(depth + 1, loops);
+                const yes = readBlock(depth + 1, loops, stopAt).body;
                 let no: Statement[] = [],
                     endDestination: number | undefined;
                 if (b[p] === 0x48) {
                     ++p;
                     const end = p + short(),
-                        starts = lines();
+                        starts = lines(stopAt);
                     if (!starts.has(destination)) fail("if jump does not target else body boundary");
-                    no = block(depth + 1, loops);
+                    no = readBlock(depth + 1, loops, stopAt).body;
                     endDestination = end;
                 }
                 const endOffset = p;
                 if (byte() !== 0x28) fail("expected endif");
-                const ends = lines();
+                const ends = lines(stopAt);
                 ends.add(endOffset);
                 if (endDestination !== undefined) {
                     if (!ends.has(endDestination)) fail("else jump does not target endif boundary");
                 } else if (!ends.has(destination)) fail("if jump does not target endif boundary");
                 body.push({ kind: "if", offset, condition, yes, no });
+                blockEnds = ends;
                 continue;
-            }
-            if (b[p] === 0x22) {
+            } else if (b[p] === 0x22) {
                 const target = loops.at(-1) ?? fail("break outside local loop (cross-call loop stack is unsupported)");
                 ++p;
                 body.push({ kind: "break", offset, target });
             } else if (b[p] === 0x29) {
                 ++p;
-                body.push({ kind: "return", offset, fields: parameters(0) });
+                body.push({ kind: "return", offset, fields: parameters(0, false, allowRandomExit) });
             } else if ((b[p] === 0x16 && b[p + 5] === 7) || (b[p] === 0x2d && b[p + 1] === 0x16 && b[p + 6] === 7)) {
                 if (b[p] === 0x2d) ++p;
                 const n = name();
                 ++p;
                 body.push({ kind: "assign", offset, name: n, value: value(0) });
-            } else body.push(call());
-            endLine();
+            } else body.push(call(allowRandomExit));
+            const before = p;
+            if (b[p] === 0x24 || (allowRandomExit && b[p] === 0x2e)) {
+                unterminatedLine = b[p] !== 0x24;
+                blockEnds = new Set([p]);
+            } else {
+                eol();
+                blockEnds = lines(stopAt);
+                blockEnds.add(before);
+            }
         }
-        return body;
+        return { body, ends: blockEnds, unterminatedLine };
     };
+    const block = (depth: number, loops: number[] = []): Statement[] => readBlock(depth, loops).body;
     const definitions: Definition[] = [];
     lines();
     while (b[p] !== 0) {

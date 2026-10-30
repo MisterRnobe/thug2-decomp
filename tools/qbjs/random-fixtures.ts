@@ -45,13 +45,27 @@ export function randomFixture() {
             "randomNamed",
             command("InspectRandom", field("nested", randomChoice(0x2f, [[3, ...field("member", integer(7)), 4]]))),
         ),
+        ...script(
+            "randomStatement",
+            randomChoice(
+                0x2f,
+                [
+                    [...assign("result", integer(42)), ...command("InspectRandom", field("picked", integer(1)))],
+                    [...command("UnknownBranchHost"), ...assign("result", integer(99))],
+                ],
+                [1, 0],
+            ),
+        ),
         0,
     ]);
     const ir = readIR(input, "random-fixtures.qb");
     const sites: Record<string, { source: string; script: number; offset: number }> = {};
-    for (const d of ir.definitions)
+    for (const d of ir.definitions) {
         if (d.kind === "script" && d.body[0]?.kind === "assign")
             sites[String(d.name)] = { source: ir.source, script: d.name, offset: d.body[0].value.offset };
+        else if (d.kind === "script" && d.body[0]?.kind === "random")
+            sites[String(d.name)] = { source: ir.source, script: d.name, offset: d.body[0].offset };
+    }
     return { input, ir, javascript: emitIR(ir), sites };
 }
 export const randomSource = () => readFileSync(new URL("../../scripting/random.js", import.meta.url), "utf8");
@@ -90,6 +104,9 @@ for(const n of [${key("randomAnonymous")},${key("randomNamed")}]){
 }
 assert(captured[0][0][0]===${key("member")} && captured[0][0][1].bits===7,'anonymous dynamic Structure merges');
 assert(captured[1][0][0]===${key("nested")} && captured[1][0][1].type===10,'named dynamic Structure stays nested');same();
+assert(run(${key("randomStatement")}).bits===42,'statement random executes selected branch');
+ref.choose(0x2f,sites[${key("randomStatement")}],[1,0],1);same();
+assert(captured[2][0][0]===${key("picked")} && captured[2][0][1].bits===1,'statement random host call');
 } finally {globalThis.__qbHost=saved;}
 })();\n`;
 }
