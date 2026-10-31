@@ -14,6 +14,19 @@ const maxFiles = 4096,
     maxReportBytes = 32 * 1024 * 1024;
 const services = ["ArrayContains", "GetArraySize", "GetNextArrayElement", "GetUpperCaseString", "StringToCharArray"];
 const serviceNames = new Map(services.map((name) => [checksum(name), name]));
+// A definition whose dynamic/object call sites fault when reached: syntactically
+// readable, but not part of the fully executable subset.
+const requiresDispatch = (definition: Definition): boolean => {
+    const seen = new Set<unknown>();
+    const visit = (x: unknown): boolean => {
+        if (!x || typeof x !== "object" || seen.has(x)) return false;
+        seen.add(x);
+        if (Array.isArray(x)) return x.some(visit);
+        const record = x as Record<string, unknown>;
+        return record.kind === "dynamic" || Object.values(record).some(visit);
+    };
+    return visit(definition);
+};
 
 export function inventoryModule(bytes: Uint8Array, source: string) {
     const metadata = { module: source, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -29,6 +42,13 @@ export function inventoryModule(bytes: Uint8Array, source: string) {
                 parameters = new Set<number>(),
                 literalTypes = new Set<number>(),
                 kinds = new Set<string>();
+            // Dynamic command/object dispatch and object dispatch are not
+            // implemented; report them honestly so the inventory never claims
+            // a module is runnable when it needs either.
+            let dynamicCalls = 0,
+                dynamicConditions = 0,
+                qualifiedCalls = 0,
+                dynamicCommandOffsets: number[] = [];
             let nodes = 0;
             const stack: unknown[] = [definition];
             while (stack.length) {
@@ -45,8 +65,16 @@ export function inventoryModule(bytes: Uint8Array, source: string) {
                 if (record.kind === "global" && value !== definition) globals.add(record.name as number);
                 if (record.kind === "parameter") parameters.add(record.name as number);
                 if (record.kind === "literal") literalTypes.add((record.value as { type: number }).type);
+                if (record.kind === "qualified") ++qualifiedCalls;
+                if (record.kind === "dynamic") {
+                    ++dynamicCalls;
+                    dynamicCommandOffsets.push(record.commandOffset as number);
+                }
+                if (record.kind === "if" && (record.condition as { kind?: string } | undefined)?.kind === "dynamic")
+                    ++dynamicConditions;
                 if (record.kind !== "literal") stack.push(...Object.values(record));
             }
+            dynamicCommandOffsets.sort((a, b) => a - b);
             return {
                 crc: definition.name,
                 offset: definition.offset,
@@ -63,11 +91,20 @@ export function inventoryModule(bytes: Uint8Array, source: string) {
                 literalTypes: [...literalTypes].sort((a, b) => a - b),
                 requiresRandom: requiresRandom({ ...ir, definitions: [definition] }),
                 kinds: [...kinds].sort(),
+                // Honest execution requirements, never a fake static call
+                // list: descriptor offsets only, no bodies or payloads.
+                execution: {
+                    objectDispatch: qualifiedCalls > 0 || undefined,
+                    dynamicDispatch: dynamicCalls + dynamicConditions > 0 || undefined,
+                    dynamicCommandOffsets: dynamicCommandOffsets.length ? dynamicCommandOffsets : undefined,
+                },
             };
         };
         return {
             ...metadata,
-            status: "supported" as const,
+            // "readable": the complete module parses and emits; scripts that
+            // need dynamic/object dispatch fault only when actually reached.
+            status: scripts.some((d) => requiresDispatch(d)) ? ("readable" as const) : ("supported" as const),
             definitions: ir.definitions.length,
             requiresRandom: requiresRandom(ir),
             globalDefinitions: ir.definitions.filter((d) => d.kind === "global").map((d) => d.name),

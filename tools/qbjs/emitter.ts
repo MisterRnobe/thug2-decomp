@@ -3,7 +3,7 @@
 
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import type { Call, Expr, Field, ModuleIR, QualifiedCall, Statement } from "./ir.ts";
+import type { Call, DynamicCall, Expr, Field, ModuleIR, NameSource, QualifiedCall, Statement } from "./ir.ts";
 import { readIR, readIRFile } from "./reader.ts";
 
 export function requiresRandom(module: ModuleIR): boolean {
@@ -77,6 +77,20 @@ export function emitIR(module: ModuleIR): string {
     // site, never dispatch a global call and never return a stub success.
     const qualifiedFault = (x: QualifiedCall, script: number): string =>
         `throw Object.assign(Error(\`QB object-qualified command 0x${x.object.toString(16)}:0x${x.name.toString(16)} requires object dispatch, which is not implemented\`), {site: ${site(script, x.offset)}})`;
+    // A descriptor text for a dynamic name, mirroring CScript::ReadName's
+    // three forms. The CRC a parameter is read from is part of the identity;
+    // the resolved checksum itself never exists statically.
+    const describe = (x: NameSource): string =>
+        x.kind === "nameLiteral"
+            ? `0x${x.name.toString(16)}`
+            : x.kind === "nameParameter"
+              ? `parameter 0x${x.parameter.toString(16)}`
+              : `unnamed parameter`;
+    // Dynamic command dispatch is not implemented either. The fault fires
+    // where the statement runs - before any argument evaluation or host
+    // dispatch - with the object/command descriptors and original site kept.
+    const dynamicFault = (x: DynamicCall, script: number): string =>
+        `throw Object.assign(Error(\`QB dynamic command ${x.object === undefined ? describe(x.command) : `${describe(x.object)}:${describe(x.command)}`} requires dynamic command dispatch, which is not implemented\`), {site: ${site(script, x.offset)}})`;
     const statements = (
         xs: Statement[],
         script: number,
@@ -91,6 +105,8 @@ export function emitIR(module: ModuleIR): string {
                         return `${mark}${call(x, script)};\n`;
                     case "qualified":
                         return `${mark}${qualifiedFault(x, script)};\n`;
+                    case "dynamic":
+                        return `${mark}${dynamicFault(x, script)};\n`;
                     case "assign":
                         return `${mark}{ const assigned = ${value(x.value, script)}; if (assigned !== undefined) v.append(p, [[${x.name}, assigned]], ${context}); }\n`;
                     case "return":
@@ -101,6 +117,9 @@ export function emitIR(module: ModuleIR): string {
                         // its result negated for a `not` prefix. A QB-script
                         // condition already counted as true before negation.
                         if (x.condition.kind === "qualified") return `${mark}${qualifiedFault(x.condition, script)};\n`;
+                        // A dynamic condition faults on its single evaluation,
+                        // exactly as any other statement condition would.
+                        if (x.condition.kind === "dynamic") return `${mark}${dynamicFault(x.condition, script)};\n`;
                         const evaluation =
                             x.condition.kind === "call"
                                 ? call(x.condition, script)
