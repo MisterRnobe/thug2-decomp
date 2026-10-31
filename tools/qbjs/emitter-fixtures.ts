@@ -5,7 +5,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { emitIR } from "./emitter.ts";
-import { command, conditional, field, fixture, floating, integer, name, param, script } from "./fixtures.ts";
+import {
+    command,
+    conditional,
+    field,
+    fixture,
+    floating,
+    integer,
+    name,
+    not_,
+    param,
+    qualified,
+    script,
+} from "./fixtures.ts";
 import { readIR } from "./reader.ts";
 import { checksum, translate } from "./translate.ts";
 
@@ -13,6 +25,8 @@ const expr = (...parts: number[][]) => [14, ...parts.flat(), 15];
 const assign = (key: string, rhs: number[]) => [...field(key, rhs), 1];
 const repeat = (body: number[], count: number[] = []) => [0x20, 1, ...body, 0x21, ...count, 1];
 const ret = (key: string, rhs: number[]) => [0x29, ...field(key, rhs), 1];
+const conditionalNot = (condition: number[], yes: number[], no: number[]): number[] =>
+    conditional([...not_, ...condition], yes, no);
 const choose = (selector: number[], cases: [number[], number[]][], fallback?: number[]) => {
     const b = [0x3c, ...selector, 1],
         exits: number[] = [];
@@ -138,6 +152,38 @@ export const emittedFixture = () => {
             ...assign("pair", [0x1f, 0, 0, 0, 0x80, 0, 0, 0x80, 0x3f]),
             ...assign("vector", [0x1e, 0, 0, 0, 0, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]),
         ]),
+        // `if not`: the condition is evaluated exactly once, then negated.
+        // A QB-script condition counts as true before negation, so the else
+        // part runs while the callee's effects still happen.
+        ...script("notHost2", [
+            ...conditionalNot(name("Flip2"), assign("taken", integer(1)), assign("taken", integer(0))),
+        ]),
+        ...script("notScript2", [
+            ...conditionalNot(name("callee2"), assign("taken", integer(1)), assign("taken", integer(0))),
+        ]),
+        ...script("notExpr2", [
+            // `not (0)`: zero raw bits are false, so negation takes the yes
+            // part. A separate script checks a nonzero condition under `not`.
+            ...conditionalNot(expr(integer(0)), assign("taken", integer(1)), assign("taken", integer(0))),
+        ]),
+        ...script("notExprTrue2", [
+            ...conditionalNot(expr(integer(5)), assign("taken", integer(1)), assign("taken", integer(0))),
+        ]),
+        // A faulting condition (absent parameter operand) aborts the if (no
+        // jump) even under `not`, mirroring ExecuteIf's `if (!m_pc) return`.
+        ...script("notFault2", [
+            ...conditionalNot(
+                expr(param("missing"), [11], integer(1)),
+                [...assign("bad", integer(1))],
+                [...assign("worse", integer(1))],
+            ),
+        ]),
+        // Object-qualified statements and if conditions are preserved in IR and
+        // fault at execution instead of dispatching a global call.
+        ...script("qualified2", [...qualified("obj", "Do", field("x", integer(1))), ...assign("after", integer(2))]),
+        ...script("qualifiedCond2", [
+            ...conditional([...name("obj"), 0x42, ...name("Check")], assign("taken", integer(1)), []),
+        ]),
         0,
     ];
     return emitIR(readIR(Uint8Array.from(data), "emitter.qb"));
@@ -147,7 +193,7 @@ export function executionBundle(valuesSource: string): string {
     const key = (s: string) => checksum(s);
     return `(() => {\nconst saved = globalThis.qb;\ntry {\n${valuesSource}\n
 const v = qbValues, scripts = new Map(), symbols = new Map();
-let fuel = 0, latest, checks = 0;
+let fuel = 0, latest, checks = 0, flipCalls = 0;
 const assert = (ok, why) => { ++checks; if (!ok) throw Error('Emitter test: ' + why); };
 const charge = n => { if ((fuel -= n) < 0) throw Error('test fuel exhausted'); };
 globalThis.qb = {
@@ -157,6 +203,7 @@ globalThis.qb = {
  define(n, fn) { scripts.set(n, fn); symbols.set(n, {kind:'callable', type:7, name:n}); },
  defineGlobal(n, value) { symbols.set(n, value); }, frame() {},
  *call(n, args, p, site) {
+   if (n === ${key("Flip2")}) { ++flipCalls; return false; }
    if (n === ${key("Pause2")}) { yield {frames:1}; return true; }
    const fn = scripts.get(n); if (!fn) throw Error('unsupported host');
    const out = yield* fn(args, false); v.append(p, out, this.context(site)); return true;
@@ -200,6 +247,34 @@ assert(state.done && get(state.value,${key("result")}).bits===9 && get(state.val
 const error=failure(${key("missing2")}, 'Absent expression operand');
 assert(error.site?.source==='emitter.qb' && error.site.script===${key("missing2")}, 'original source/CRC in error');
 failure(${key("shortCircuit2")}, 'Absent expression operand');
+// \`if not\` with a host condition: exactly one evaluation, then negation.
+let np = run(${key("notHost2")});
+assert(flipCalls === 1, 'not condition evaluated exactly once');
+assert(get(np, ${key("taken")}).bits === 1, 'negated false host condition takes the yes part');
+np = run(${key("notHost2")});
+assert(flipCalls === 2 && get(np, ${key("taken")}).bits === 1, 'each run evaluates once more');
+// \`if not <script call>\`: the call counts as true before negation, so the
+// else part runs while the callee's effects are still applied.
+np = run(${key("notScript2")});
+assert(get(np, ${key("taken")}).bits === 0, 'negated script-call condition jumps to else');
+assert(get(np, ${key("result")}).bits === 9, 'callee effects preserved under not');
+// \`if not <expression>\`: zero raw bits are false, so negation takes the yes
+// part; a nonzero condition is negated into the else part.
+np = run(${key("notExpr2")});
+assert(get(np, ${key("taken")}).bits === 1, 'negated zero expression is true');
+np = run(${key("notExprTrue2")});
+assert(get(np, ${key("taken")}).bits === 0, 'negated nonzero expression is false');
+// A faulting condition aborts the if under \`not\` (CScript::ExecuteIf's
+// \`if (!m_pc) return;\`): no jump, no else part.
+const notError = failure(${key("notFault2")}, 'Absent expression operand');
+assert(notError.site?.script === ${key("notFault2")}, 'not fault keeps original site');
+// Object-qualified statements fault explicitly; they never dispatch a global
+// call and never return a stub success.
+const qualifiedError = failure(${key("qualified2")}, 'object-qualified command');
+assert(String(qualifiedError).includes('0x' + (${key("obj")}).toString(16)), 'fault names the object CRC');
+assert(qualifiedError.site?.script === ${key("qualified2")}, 'qualified fault keeps original site');
+const condError = failure(${key("qualifiedCond2")}, 'object-qualified command');
+assert(condError.site?.source === 'emitter.qb', 'qualified condition fault keeps source');
 assert(checks >= 23, 'execution assertions ran');
 } finally { globalThis.qb = saved; }\n})();\n`;
 }

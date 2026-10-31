@@ -15,10 +15,23 @@ export type Expr =
 export type Field =
     | { name: number; value: Expr; offset: number; flattenStructure?: true }
     | { spread: true; offset: number };
+// A `name:command` statement (token 0x42 after the command name). The
+// reader preserves the object name and original offsets; the emitter
+// reports an explicit fault at execution instead of a global call.
+export type QualifiedCall = {
+    kind: "qualified";
+    offset: number;
+    object: number;
+    objectOffset: number;
+    commandOffset: number;
+    name: number;
+    fields: Field[];
+};
 export type Call = { kind: "call"; offset: number; name: number; fields: Field[] };
 export type SwitchLabel = { offset: number; fields: Field[] };
 export type Statement =
     | Call
+    | QualifiedCall
     | { kind: "assign"; offset: number; name: number; value: Expr }
     | { kind: "return"; offset: number; fields: Field[] }
     // Preserve the complete repeat argument list: GetInteger(0) is applied
@@ -32,7 +45,17 @@ export type Statement =
           cases: { labels: SwitchLabel[]; body: Statement[] }[];
           fallback?: Statement[];
       }
-    | { kind: "if"; offset: number; condition: Call | Expr; yes: Statement[]; no: Statement[] }
+    // CScript::ExecuteIf: token 0x39 negates the condition after its single
+    // evaluation (effects and faults are preserved). `negate: true` marks
+    // that prefix; the flag is absent for plain `if`.
+    | {
+          kind: "if";
+          offset: number;
+          condition: Call | QualifiedCall | Expr;
+          negate?: true;
+          yes: Statement[];
+          no: Statement[];
+      }
     | { kind: "random"; offset: number; opcode: number; weights: number[]; branches: Statement[][] };
 export type Definition =
     | { kind: "script"; offset: number; name: number; defaults: Field[]; body: Statement[] }

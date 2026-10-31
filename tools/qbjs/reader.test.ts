@@ -6,7 +6,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { command, conditional, field, fixture, integer, name, param, script, word } from "./fixtures.ts";
+import {
+    command,
+    conditional,
+    field,
+    fixture,
+    integer,
+    name,
+    not_,
+    param,
+    qualified,
+    script,
+    word,
+} from "./fixtures.ts";
 import type { Expr } from "./ir.ts";
 import { readIR } from "./reader.ts";
 import { checksum, translate } from "./translate.ts";
@@ -510,6 +522,101 @@ test("accepts jump targets at endif and following EOL boundaries, rejecting payl
     assert.throws(() => readIR(module(script("a", conditional(integer(1), yes, [])))), /unsupported condition/);
     assert.throws(() => readIR(Uint8Array.from([...word(0xb075ef6f), 0])), /precompiled QB images/);
 });
+test("switch exits land on the endswitch or its EOL token, never a numbered-line payload", () => {
+    // One case: 3c selector 01 | 3e 49 <case jump> label 01 | body | 49 <exit> |
+    // <tail>, where tail starts with the 0x3d endswitch. Both jump deltas are
+    // patched relative to their own bytes: the case jump targets the 0x3d
+    // boundary, the exit jump a chosen offset from the 0x3d byte.
+    const switchWithExit = (exitFromEnd: number, tail: number[]) => {
+        const b = [
+            0x3c,
+            ...field("x", param("p")),
+            1,
+            0x3e,
+            0x49,
+            0,
+            0,
+            ...integer(1),
+            1,
+            ...command("Body"),
+            0x49,
+            0,
+            0,
+            ...tail,
+        ];
+        // 0x3c + 12 selector bytes + EOL = the case's 3e at 14, 0x49 at 15,
+        // its 2-byte delta at 16; the body 0x49 at 30, its delta at 31.
+        const caseJump = 16,
+            exit = b.length - tail.length - 2,
+            end = b.length - tail.length;
+        b[caseJump] = (end - caseJump) & 255;
+        b[caseJump + 1] = (end - caseJump) >>> 8;
+        b[exit] = (end + exitFromEnd - exit) & 255;
+        b[exit + 1] = (end + exitFromEnd - exit) >>> 8;
+        return b;
+    };
+    // Ordinary EOL after the endswitch: the EOL token at end+1 is a valid
+    // landing point, equivalent to the endswitch itself.
+    let body = switchWithExit(1, [0x3d, 1]);
+    assert.equal(readIR(module(script("a", body))).definitions.length, 1);
+    body = switchWithExit(0, [0x3d, 1]);
+    assert.equal(readIR(module(script("a", body))).definitions.length, 1);
+    // Numbered EOL (0x02 + 4 payload bytes) after the endswitch: the EOL
+    // token at end+1 is valid, but none of the payload bytes is a boundary.
+    body = switchWithExit(1, [0x3d, 2, ...word(42)]);
+    assert.equal(readIR(module(script("a", body))).definitions.length, 1);
+    for (const delta of [2, 3, 4, 5, 6]) {
+        body = switchWithExit(delta, [0x3d, 2, ...word(42)]);
+        assert.throws(() => readIR(module(script("a", body))), /case exit does not target endswitch/);
+    }
+    // The default-case exit jump is validated the same way.
+    const switchWithDefault = (exitFromEnd: number, tail: number[]) => {
+        const b = [
+            0x3c,
+            ...field("x", param("p")),
+            1,
+            0x3e,
+            0x49,
+            0,
+            0,
+            ...integer(1),
+            1,
+            ...command("Body"),
+            0x49,
+            0,
+            0,
+            0x3f,
+            0x49,
+            0,
+            0,
+            ...command("Fallback"),
+            ...tail,
+        ];
+        // 3c(0) selector(1..12) EOL(13) 3e(14) 49(15) caseJump(16,17)
+        // label(18..22) EOL(23) body(24..29) exit49(30) caseExit(31,32)
+        // 3f(33) 49(34) defaultJump(35,36) fallback body(37..42, no exit
+        // jump after it) endswitch at end.
+        const caseJump = 16,
+            caseExit = 31,
+            defaultAt = 33,
+            defaultJump = 35,
+            end = b.length - tail.length;
+        b[caseJump] = (defaultAt - caseJump) & 255;
+        b[caseJump + 1] = (defaultAt - caseJump) >>> 8;
+        b[caseExit] = (end + exitFromEnd - caseExit) & 255;
+        b[caseExit + 1] = (end + exitFromEnd - caseExit) >>> 8;
+        b[defaultJump] = (end - defaultJump) & 255;
+        b[defaultJump + 1] = (end - defaultJump) >>> 8;
+        return b;
+    };
+    assert.equal(readIR(module(script("a", switchWithDefault(1, [0x3d, 1])))).definitions.length, 1);
+    for (const delta of [2, 3, 4, 5]) {
+        assert.throws(
+            () => readIR(module(script("a", switchWithDefault(delta, [0x3d, 2, ...word(42)])))),
+            /case exit does not target endswitch/,
+        );
+    }
+});
 test("CLI writes deterministic IR and preserves input, including same-path/hardlink rejection", () => {
     const dir = mkdtempSync(join(tmpdir(), "thug2-reader-"));
     try {
@@ -536,4 +643,70 @@ test("CLI writes deterministic IR and preserves input, including same-path/hardl
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+});
+test("if not consumes the 0x39 prefix after the jump target and marks negation", () => {
+    const plain = readIR(module(script("a", conditional(name("Check"), [], [])))).definitions[0]!;
+    const negated = readIR(
+        module(script("a", conditional([...not_, ...name("Check")], [...command("Yes")], [...command("No")]))),
+    ).definitions[0]!;
+    assert.equal(plain.kind, "script");
+    assert.equal(negated.kind, "script");
+    if (plain.kind !== "script" || negated.kind !== "script") throw Error("expected scripts");
+    const plainIf = plain.body[0]!,
+        negatedIf = negated.body[0]!;
+    assert.equal(plainIf.kind, "if");
+    assert.equal(negatedIf.kind, "if");
+    if (plainIf.kind !== "if" || negatedIf.kind !== "if") throw Error("expected ifs");
+    assert.equal(plainIf.negate, undefined);
+    assert.equal(negatedIf.negate, true);
+    assert.equal(negatedIf.condition.kind, "call");
+    assert.equal(negatedIf.yes[0]!.kind, "call");
+    // A bare 0x39 with no following condition command is still malformed.
+    assert.throws(
+        () => readIR(module(script("a", [0x47, 2, 0, 0x39, 0x28, 1]))),
+        /unsupported condition command token/,
+    );
+    assert.throws(
+        () => readIR(module(script("a", [0x47, 2, 0, 0x39, 1, 0x28, 1]))),
+        /unsupported condition command token/,
+    );
+});
+test("object-qualified statements preserve object, command and original offsets", () => {
+    const body = [...qualified("obj", "Do", field("x", integer(1))), ...command("After")];
+    const def = readIR(module(script("a", body))).definitions[0]!;
+    assert.equal(def.kind, "script");
+    if (def.kind !== "script") throw Error("expected script");
+    const first = def.body[0]!;
+    assert.equal(first.kind, "qualified");
+    if (first.kind !== "qualified") throw Error("expected qualified");
+    assert.equal(first.object, checksum("obj"));
+    assert.equal(first.name, checksum("Do"));
+    assert.equal(first.fields.length, 1);
+    // Offsets are module-absolute: the statement starts after the script
+    // header (0x23 + name CRC + EOL = 7 bytes).
+    assert.equal(first.objectOffset, 7);
+    assert.equal(first.commandOffset, 13); // 0x16 + 4-byte CRC, then 0x42
+    assert.equal(first.offset, first.objectOffset);
+    assert.equal((def.body[1] as { kind: string }).kind, "call");
+});
+test("object-qualified if conditions are preserved in IR", () => {
+    const def = readIR(
+        module(script("a", conditional([...name("obj"), 0x42, ...name("Check")], [...command("Yes")], []))),
+    ).definitions[0]!;
+    assert.equal(def.kind, "script");
+    if (def.kind !== "script") throw Error("expected script");
+    const branch = def.body[0]!;
+    assert.equal(branch.kind, "if");
+    if (branch.kind !== "if") throw Error("expected if");
+    assert.equal(branch.condition.kind, "qualified");
+});
+test("dynamic command names from parameters are rejected explicitly", () => {
+    assert.throws(
+        () => readIR(module(script("a", [...param("p"), ...field("f", integer(1)), 1]))),
+        /dynamic command name from parameter/,
+    );
+    assert.throws(
+        () => readIR(module(script("a", conditional([...param("p"), 0x42, ...name("Check")], [], [])))),
+        /dynamic condition command name from parameter/,
+    );
 });
