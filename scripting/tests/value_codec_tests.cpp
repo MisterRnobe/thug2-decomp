@@ -1,4 +1,4 @@
-// NOT ORIGINAL - QuickJS tests for the rich by-value QB codec (issue #21).
+// NOT ORIGINAL - QuickJS tests for the rich by-value QB codec.
 // Independent expected shapes/words: encode results are inspected directly
 // against the values.js representation instead of relying on round-trip only.
 #include "thug2/js_value.hpp"
@@ -171,7 +171,7 @@ void test_encode_string_shapes() {
         JSValue v = codec.encode(RichValue::string(canonical));
         CHECK(num(rt.ctx, v, "type") == 3);
         JSValue arr = JS_GetPropertyStr(rt.ctx, v, "bytes");
-        CHECK(JS_IsArray(rt.ctx, arr));
+        CHECK(JS_IsArray(arr));
         CHECK(len(rt.ctx, arr) == 4);
         JSValue b0 = at(rt.ctx, arr, 0);
         std::uint32_t x = 0;
@@ -290,7 +290,7 @@ void test_encode_parameters_shape() {
         RichField{0x2222, RichValue::string({'a', 'b'})},
     };
     JSValue v = codec.encode_parameters(params);
-    CHECK(JS_IsArray(rt.ctx, v));
+    CHECK(JS_IsArray(v));
     CHECK(len(rt.ctx, v) == 2);
     JSValue f0 = at(rt.ctx, v, 0);
     JSValue n0 = at(rt.ctx, f0, 0);
@@ -648,7 +648,7 @@ void test_limits() {
     }
 }
 
-// --- review regressions (issue #21 review round 1) ---------------------------
+// --- review regressions (ownership/error handling) ---------------------------
 // Every failure must leave a reusable context: no stale pending exception.
 #define CHECK_DECODE_FAILS(code, needle) do { \
     JSValue owned_ = eval(rt.ctx, (code)); \
@@ -775,11 +775,11 @@ void test_review_decode_context_poisoning() {
         "({type:1,get bits(){ const e=Error('outer');"
         "Object.defineProperty(e,'message',{get(){throw Error('inner')}}); throw e; }})",
         "bits");
-    // P1-3: revoked proxy passed as bytes; JS_IsArray returns -1, not 0.
+    // quickjs-ng JS_IsArray does not unwrap proxies: reject without traversal.
     CHECK_DECODE_FAILS(
         "(()=>{ const p=Proxy.revocable([],{}); p.revoke();"
         "return {type:3,bytes:p.proxy}; })()",
-        "array check");
+        "invalid string shape");
     // decode_parameters variants of the same failure classes.
     {
         JSValue v = eval(rt.ctx,

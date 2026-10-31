@@ -3,11 +3,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { executionBundle } from "./emitter-fixtures.ts";
 import { expressionResultAssertions, expressionResultFixture } from "./expression-result-fixtures.ts";
+import { foundationBundle } from "./foundation-fixtures.ts";
+import { helperSource } from "./helper-sources.ts";
 import { randomAssertions, randomFixture, randomSource } from "./random-fixtures.ts";
 import { nativeRuntimeBundle, runtimeAssertions } from "./runtime-fixtures.ts";
 
 export function integrationBundle(): string {
-    const values = readFileSync(new URL("../../scripting/values.js", import.meta.url), "utf8");
+    const values = helperSource("values");
     const tests = readFileSync(new URL("../../scripting/tests/values.test.js", import.meta.url), "utf8");
     const randomTests = readFileSync(new URL("../../scripting/tests/random.test.js", import.meta.url), "utf8");
     return (
@@ -26,6 +28,7 @@ export function integrationBundle(): string {
         expressionResultFixture().javascript +
         expressionResultAssertions() +
         '\nif (!qbExpressionResultTest.completed || !qbExpressionResultHelperTest.completed) throw Error("Expression result assertions did not complete");\n' +
+        foundationBundle() +
         "\nglobalThis.qbIntegrationTestResult = {completed:true,values:qbValuesTestResult.assertions};\n"
     );
 }

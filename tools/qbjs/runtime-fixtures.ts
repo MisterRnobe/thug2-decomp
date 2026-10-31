@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { emittedFixture } from "./emitter-fixtures.ts";
 import { fixture } from "./fixtures.ts";
+import { helperSource } from "./helper-sources.ts";
 import { randomFixture, randomSource } from "./random-fixtures.ts";
 import { checksum, translate } from "./translate.ts";
 
@@ -11,7 +12,7 @@ export const nativeRuntimeBundle = (withRandom = false) =>
     "if (globalThis.qb?.runtimeVersion !== 2) {\n" +
     readFileSync(new URL("../../scripting/runtime.js", import.meta.url), "utf8") +
     "\n}\n" +
-    readFileSync(new URL("../../scripting/values.js", import.meta.url), "utf8") +
+    helperSource("values") +
     emittedFixture() +
     (withRandom ? randomFixture().javascript : "");
 
@@ -20,17 +21,18 @@ export function runtimeAssertions(): string {
     return `(() => {
 const savedHost = globalThis.__qbHost;
 try {
-let calls=0, assertions=0, owner=0;
+let calls=0, flipCalls=0, assertions=0, owner=0;
 const assert = (ok, why) => { ++assertions; if (!ok) throw Error('Runtime v2 test: '+why); };
 globalThis.__qbHost = (name,args,p) => {
+ if (name === ${key("Flip2")}) { ++flipCalls; return {condition:false,outputs:[[${key("flipped")},integer(7)]],frames:1}; }
  if (name !== ${key("Pause2")}) throw Error('Unknown test host');
  ++calls; owner=qb.context({source:'host',script:name,offset:0}).owner;
  return {condition:true,outputs:[[${key("host")},{type:1,bits:123}]],frames:1};
 };
 const integer = n => ({type:1,bits:n >>> 0});
 const get = (p,n) => p.findLast(f => f[0]===n)?.[1];
-const run = (name,args=[],fuel=100000) => {
- const id=qb.start(name,args,fuel); try { return qb.update(id,0); } finally { qb.cancel(id); }
+const run = (name,args=[],fuel=100000,frame=0) => {
+ const id=qb.start(name,args,fuel); try { return qb.update(id,frame); } finally { qb.cancel(id); }
 };
 let r=run(${key("math2")});
 assert(r.status==='finished',r.message);
@@ -51,7 +53,7 @@ for (const [script,expected] of [[${key("count2")},3],[${key("once2")},3],[${key
 r=run(${key("switch2")},[[${key("x")},integer(2)],[${key("label")},integer(2)]]);
 assert(r.status==='finished' && get(r.parameters,${key("result")}).bits===9,'switch');
 for (const script of [${key("breakParams2")},${key("missing2")},${key("groupFault2")},${key("shortCircuit2")}]) {
- r=run(script); assert(r.status==='fault' && r.message.includes('emitter.qb') && r.message.includes('QB offset'),'value fault site');
+ r=run(script); assert(r.status==='finished','absent optional operand must not fault');
 }
 r=run(${key("fuel2")},[],10); assert(r.status==='fault' && r.message.includes('fuel exhausted'),'loop fuel');
 r=run(${key("math2")},[],0); assert(r.status==='fault','zero fuel');
@@ -77,6 +79,15 @@ failed=false; try { qb.module({format:2,requires:{values:2}}); } catch { failed=
 assert(failed,'loading with retained task blocked');
 r=qb.update(task,1); assert(r.status==='finished' && get(r.parameters,${key("done")}).bits===1,'resume');
 qb.cancel(task);
+const negated=qb.start(${key("notHost2")},[],100000);
+try {
+ r=qb.update(negated,2); assert(r.status==='waiting' && flipCalls===1,'NOT host suspends once');
+ assert(get(r.parameters,${key("flipped")}).bits===7,'NOT retains host output before suspension');
+ assert(qb.update(negated,2).status==='waiting' && flipCalls===1,'NOT same-frame wait idempotent');
+ r=qb.update(negated,3); assert(r.status==='finished' && get(r.parameters,${key("taken")}).bits===1 && flipCalls===1,'NOT negates condition after resume');
+} finally {qb.cancel(negated);}
+r=run(${key("notEmpty2")},[],100000,3); assert(r.status==='finished' && get(r.parameters,${key("taken")}).bits===1,'NOT empty expression is true');
+r=run(${key("notFault2")},[],100000,3); assert(r.status==='fault' && r.message.includes('Division by zero') && get(r.parameters,${key("bad")})===undefined && get(r.parameters,${key("worse")})===undefined,'NOT never converts arithmetic faults to booleans');
 assert(assertions >= 24,'assertions ran');
 } finally { globalThis.__qbHost=savedHost; }
 })();\n`;

@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { emitIR } from "./emitter.ts";
 import { command, field, integer, name, param, script } from "./fixtures.ts";
+import { helperSource } from "./helper-sources.ts";
 import { randomChoice } from "./random-fixtures.ts";
 import { readIR } from "./reader.ts";
 import { checksum } from "./translate.ts";
@@ -98,10 +99,11 @@ try {
 
 export function expressionResultBundle() {
     return (
-        ["random.js", "values.js", "runtime.js"]
-            .map((file) => readFileSync(new URL(`../../scripting/${file}`, import.meta.url), "utf8"))
-            .join("\n") +
-        "\n" +
+        helperSource("random") +
+        helperSource("values") +
+        "if (globalThis.qb?.runtimeVersion !== 2) {\n" +
+        readFileSync(new URL("../../scripting/runtime.js", import.meta.url), "utf8") +
+        "\n}\n" +
         readFileSync(new URL("../../scripting/tests/expression_result.test.js", import.meta.url), "utf8") +
         expressionResultFixture().javascript +
         expressionResultAssertions() +

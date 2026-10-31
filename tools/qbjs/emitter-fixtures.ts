@@ -1,8 +1,9 @@
+import { helperSource } from "./helper-sources.ts";
 // NOT ORIGINAL - synthetic format-2 execution fixtures and TEST-ONLY dispatcher.
 // This adapter exercises generated generators; it is not the product scheduler
 // or C++ bridge. values.js is the real compatibility implementation.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { emitIR } from "./emitter.ts";
 import {
@@ -169,11 +170,18 @@ export const emittedFixture = () => {
         ...script("notExprTrue2", [
             ...conditionalNot(expr(integer(5)), assign("taken", integer(1)), assign("taken", integer(0))),
         ]),
-        // A faulting condition (absent parameter operand) aborts the if (no
+        // A faulting condition (division by zero) aborts the if (no
         // jump) even under `not`, mirroring ExecuteIf's `if (!m_pc) return`.
-        ...script("notFault2", [
+        ...script("notEmpty2", [
             ...conditionalNot(
                 expr(param("missing"), [11], integer(1)),
+                assign("taken", integer(1)),
+                assign("taken", integer(0)),
+            ),
+        ]),
+        ...script("notFault2", [
+            ...conditionalNot(
+                expr(integer(1), [12], integer(0)),
                 [...assign("bad", integer(1))],
                 [...assign("worse", integer(1))],
             ),
@@ -231,7 +239,7 @@ p = run(${key("once2")});
 assert(get(p, ${key("n")}).bits === 3 && get(p, ${key("limit")}).bits === 5, 'repeat count read once after first iteration');
 assert(get(run(${key("wrap2")}), ${key("n")}).bits === 2, 'repeat zero wraps until break');
 assert(get(run(${key("unbounded2")}), ${key("n")}).bits === 2, 'typed merging removes Integer count, loop runs until break');
-failure(${key("breakParams2")}, 'Absent expression operand');
+assert(run(${key("breakParams2")}) !== undefined, 'break ignores absent optional expression');
 failure(${key("fuel2")}, 'fuel exhausted');
 for (const [input, expected] of [[1,9],[2,9],[3,9],[4,10],[8,99]]) {
  p=run(${key("switch2")}, [[${key("x")},integer(input)],[${key("label")},integer(2)]]);
@@ -239,14 +247,13 @@ for (const [input, expected] of [[1,9],[2,9],[3,9],[4,10],[8,99]]) {
 }
 
 assert(get(run(${key("switch2")}), ${key("result")}).bits === 99, 'absent selector defaults');
-failure(${key("groupFault2")}, 'Absent expression operand');
+assert(get(run(${key("groupFault2")}), ${key("result")}).bits===9, 'empty grouped label does not undo earlier match');
 assert(get(run(${key("switchBreak2")}), ${key("wrong")}) === undefined, 'break inside switch targets loop');
 fuel=100000; const task=scripts.get(${key("caller2")})([],true); let state=task.next();
 assert(!state.done && state.value.frames===1, 'generator yields at call'); state=task.next();
 assert(state.done && get(state.value,${key("result")}).bits===9 && get(state.value,${key("done")}).bits===1, 'callee defaults/returns and resume');
-const error=failure(${key("missing2")}, 'Absent expression operand');
-assert(error.site?.source==='emitter.qb' && error.site.script===${key("missing2")}, 'original source/CRC in error');
-failure(${key("shortCircuit2")}, 'Absent expression operand');
+assert(get(run(${key("missing2")}), ${key("result")})===undefined, 'missing operand omits assignment');
+assert(get(run(${key("shortCircuit2")}), ${key("result")})===undefined, 'empty expression propagates');
 // \`if not\` with a host condition: exactly one evaluation, then negation.
 let np = run(${key("notHost2")});
 assert(flipCalls === 1, 'not condition evaluated exactly once');
@@ -266,7 +273,9 @@ np = run(${key("notExprTrue2")});
 assert(get(np, ${key("taken")}).bits === 0, 'negated nonzero expression is false');
 // A faulting condition aborts the if under \`not\` (CScript::ExecuteIf's
 // \`if (!m_pc) return;\`): no jump, no else part.
-const notError = failure(${key("notFault2")}, 'Absent expression operand');
+np=run(${key("notEmpty2")});
+assert(get(np,${key("taken")}).bits===1,'empty condition is false before NOT');
+const notError = failure(${key("notFault2")}, 'Division by zero');
 assert(notError.site?.script === ${key("notFault2")}, 'not fault keeps original site');
 // Object-qualified statements fault explicitly; they never dispatch a global
 // call and never return a stub success.
@@ -284,9 +293,5 @@ assert(checks >= 23, 'execution assertions ran');
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     const output = process.argv[2];
     if (!output || process.argv.length !== 3) throw Error("Usage: node tools/qbjs/emitter-fixtures.ts OUTPUT.js");
-    writeFileSync(
-        output,
-        executionBundle(readFileSync(new URL("../../scripting/values.js", import.meta.url), "utf8")) +
-            translate(fixture(), "synthetic.qb"),
-    );
+    writeFileSync(output, executionBundle(helperSource("values")) + translate(fixture(), "synthetic.qb"));
 }
