@@ -27,11 +27,34 @@ export type QualifiedCall = {
     name: number;
     fields: Field[];
 };
+// CScript::ReadName (0x004729E0) accepts three name forms: a literal checksum
+// (`16 <crc>`), a checksum read from a named parameter (`2d 16 <param-crc>`)
+// and the unnamed checksum parameter (`2c`). The last two resolve only at
+// run time, so their IR keeps the source distinction and the CRC that was
+// read from, never a dispatch target.
+export type NameSource =
+    | { kind: "nameLiteral"; offset: number; name: number }
+    | { kind: "nameParameter"; offset: number; parameter: number }
+    | { kind: "nameUnnamed"; offset: number };
+// A command whose name (or the object of its `name:command` qualifier) comes
+// from a parameter, per CScript::ExecuteCommand's ReadName-based dispatch.
+// Dynamic dispatch is not implemented: loading a module containing one
+// succeeds, and the emitter faults with the original offsets when it runs.
+export type DynamicCall = {
+    kind: "dynamic";
+    offset: number;
+    object?: NameSource;
+    command: NameSource;
+    commandOffset: number;
+    fields: Field[];
+};
 export type Call = { kind: "call"; offset: number; name: number; fields: Field[] };
+export type CommandStatement = Call | QualifiedCall | DynamicCall;
 export type SwitchLabel = { offset: number; fields: Field[] };
 export type Statement =
     | Call
     | QualifiedCall
+    | DynamicCall
     | { kind: "assign"; offset: number; name: number; value: Expr }
     | { kind: "return"; offset: number; fields: Field[] }
     // Preserve the complete repeat argument list: GetInteger(0) is applied
@@ -51,7 +74,7 @@ export type Statement =
     | {
           kind: "if";
           offset: number;
-          condition: Call | QualifiedCall | Expr;
+          condition: CommandStatement | Expr;
           negate?: true;
           yes: Statement[];
           no: Statement[];

@@ -5,7 +5,17 @@
 // This reads raw token streams, not the separate PC precompiled-image format.
 import { closeSync, existsSync, fstatSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import type { Call, Definition, Expr, Field, ModuleIR, QualifiedCall, Statement, SwitchLabel } from "./ir.ts";
+import type {
+    Call,
+    CommandStatement,
+    Definition,
+    Expr,
+    Field,
+    ModuleIR,
+    NameSource,
+    Statement,
+    SwitchLabel,
+} from "./ir.ts";
 
 export type ReaderLimits = { nodes?: number; depth?: number };
 export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLimits = {}): ModuleIR {
@@ -357,24 +367,69 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
             n = name();
         return { kind: "call", offset, name: n, fields: parameters(0, false, allowRandomExit) };
     };
-    // A `name:command` call (token 0x42 after the object name). The reader
-    // keeps the object name and every original offset; object dispatch itself
-    // is not built here, so the emitter faults instead of rewriting it into
-    // a global call.
-    const qualified = (allowRandomExit = false): QualifiedCall => {
-        const objectOffset = p,
-            object = name();
-        if (byte() !== 0x42) fail("expected object qualifier");
+    // CScript::ReadName: a literal checksum (`16 <crc>`), a checksum read from
+    // a named parameter (`2d 16 <param-crc>`) or the unnamed checksum
+    // parameter (`2c`). The dynamic forms keep their source and offset; the
+    // resolved checksum exists only at run time and is never assumed here.
+    const readName = (): NameSource => {
+        const offset = p;
+        if (b[p] === 0x16) return { kind: "nameLiteral", offset, name: name() };
+        if (b[p] === 0x2c) return { kind: "nameUnnamed", offset: p++ };
+        if (b[p] === 0x2d) {
+            // The original reads `2d 16 <crc>` as one unit: skip the 0x2d and
+            // require the checksum-name token, without assuming a fixed width.
+            ++p;
+            return { kind: "nameParameter", offset, parameter: name() };
+        }
+        return fail("expected checksum name");
+    };
+    // CScript::ExecuteCommand: the object of a `name:command` call is read
+    // with the same ReadName, so any combination of static and dynamic
+    // object/command is possible. Static names keep the Call/QualifiedCall
+    // shapes; a dynamic slot gets its own node with all original offsets.
+    const commandStatement = (allowRandomExit = false): CommandStatement => {
+        const offset = p,
+            first = readName();
+        if (b[p] !== 0x42) {
+            // A plain call. Dynamic only when the command name itself comes
+            // from a parameter; a dynamic assignment is not part of ReadName
+            // dispatch and is rejected rather than misread as a call.
+            if (first.kind !== "nameLiteral") {
+                if (b[p] === 7) fail("dynamic assignment is not supported");
+                return {
+                    kind: "dynamic",
+                    offset,
+                    command: first,
+                    commandOffset: first.offset,
+                    fields: parameters(0, false, allowRandomExit),
+                };
+            }
+            return { kind: "call", offset, name: first.name, fields: parameters(0, false, allowRandomExit) };
+        }
+        ++p;
         const commandOffset = p,
-            n = name();
+            command = readName();
+        const fields = parameters(0, false, allowRandomExit);
+        if (first.kind === "nameLiteral" && command.kind === "nameLiteral")
+            return {
+                kind: "qualified",
+                offset,
+                object: first.name,
+                objectOffset: first.offset,
+                commandOffset,
+                name: command.name,
+                fields,
+            };
+        // The qualifier is preserved as a descriptor either way: a static
+        // object stays a nameLiteral inside the dynamic node, so the fault
+        // keeps the full object/command identity, not just a "dynamic" flag.
         return {
-            kind: "qualified",
-            offset: objectOffset,
-            object,
-            objectOffset,
+            kind: "dynamic",
+            offset,
+            object: first,
+            command,
             commandOffset,
-            name: n,
-            fields: parameters(0, false, allowRandomExit),
+            fields,
         };
     };
     const readBlock = (
@@ -509,21 +564,16 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 const destination = p + short();
                 // CScript::ExecuteIf consumes an optional 0x39 NOT prefix
                 // before the condition command. ExecuteCommand accepts the
-                // object-qualified `name:command` form here too.
+                // object-qualified `name:command` form here too, with every
+                // ReadName dynamic-object/command combination.
                 const negate = b[p] === 0x39;
                 if (negate) ++p;
                 const condition =
-                    b[p] === 0x16
-                        ? b[p + 5] === 0x42
-                            ? qualified()
-                            : call()
+                    b[p] === 0x16 || b[p] === 0x2d || b[p] === 0x2c
+                        ? commandStatement()
                         : b[p] === 0x0e
                           ? value(0)
-                          : fail(
-                                b[p] === 0x2d || b[p] === 0x2c
-                                    ? "dynamic condition command name from parameter is not supported"
-                                    : "unsupported condition command token",
-                            );
+                          : fail("unsupported condition command token");
                 eol();
                 const yes = readBlock(depth + 1, loops, stopAt).body;
                 let no: Statement[] = [],
@@ -558,16 +608,17 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 const n = name();
                 ++p;
                 body.push({ kind: "assign", offset, name: n, value: value(0) });
-            } else if (b[p] === 0x16 && b[p + 5] === 0x42) {
-                // Object-qualified `name:command` statement (token 0x42).
-                body.push(qualified(allowRandomExit));
-            } else if (b[p] === 0x2d || b[p] === 0x2c) {
-                // ExecuteCommand's ReadName also accepts a parameter checksum
+            } else if (b[p] === 0x2c || (b[p] === 0x2d && b[p + 1] === 0x16 && b[p + 6] !== 7)) {
+                // ExecuteCommand's ReadName accepts a parameter checksum
                 // (`2d 16 <name>`) or the unnamed spread (`2c`) as the command
                 // name, and a parameter checksum as the object of a `name:`
-                // qualified call. Dynamic dispatch has no static IR name, so
-                // reject it explicitly rather than misreading it.
-                fail("dynamic command name from parameter is not supported");
+                // qualified call. Preserve the dynamic form in IR with all
+                // original offsets; execution faults rather than dispatches.
+                body.push(commandStatement(allowRandomExit));
+            } else if (b[p] === 0x16 && b[p + 5] === 0x42) {
+                // Object-qualified `name:command` statement (token 0x42), in
+                // every static/dynamic object/command combination.
+                body.push(commandStatement(allowRandomExit));
             } else body.push(call(allowRandomExit));
             const before = p;
             if (b[p] === 0x24 || (allowRandomExit && b[p] === 0x2e)) {

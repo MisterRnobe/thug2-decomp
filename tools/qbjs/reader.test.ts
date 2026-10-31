@@ -700,13 +700,32 @@ test("object-qualified if conditions are preserved in IR", () => {
     if (branch.kind !== "if") throw Error("expected if");
     assert.equal(branch.condition.kind, "qualified");
 });
-test("dynamic command names from parameters are rejected explicitly", () => {
+// Superseded by issue #42: ReadName's parameter forms are now preserved as
+// dynamic nodes (dynamic-command.test.ts holds the full coverage). The
+// rejections that remain true stay asserted here.
+test("dynamic command names from parameters parse as dynamic nodes, malformed forms still fail", () => {
+    const def = readIR(module(script("a", [...param("p"), ...field("f", integer(1)), 1]))).definitions[0]!;
+    assert.equal(def.kind, "script");
+    if (def.kind !== "script") throw Error("expected script");
+    const call = def.body[0]!;
+    assert.equal(call.kind, "dynamic");
+    const cond = readIR(
+        module(script("a", conditional([...param("p"), 0x42, ...name("Check")], [...command("Yes")], []))),
+    ).definitions[0]!;
+    if (cond.kind !== "script") throw Error("expected script");
+    const branch = cond.body[0]!;
+    assert.equal(branch.kind, "if");
+    if (branch.kind !== "if") throw Error("expected if");
+    assert.equal(branch.condition.kind, "dynamic");
+    // `2d` without its checksum-name token is malformed. `2d 16 <crc> =` is
+    // the static assignment to the parameter named <crc>; the unnamed `2c =`
+    // is a dynamic assignment and stays unsupported.
+    assert.throws(() => readIR(module(script("a", [0x2d, 1, 1]))), /expected checksum name/);
+    const assigned = readIR(module(script("a", [...param("p"), 7, ...integer(1), 1]))).definitions[0]!;
+    if (assigned.kind !== "script") throw Error("expected script");
+    assert.equal(assigned.body[0]!.kind, "assign");
     assert.throws(
-        () => readIR(module(script("a", [...param("p"), ...field("f", integer(1)), 1]))),
-        /dynamic command name from parameter/,
-    );
-    assert.throws(
-        () => readIR(module(script("a", conditional([...param("p"), 0x42, ...name("Check")], [], [])))),
-        /dynamic condition command name from parameter/,
+        () => readIR(module(script("a", [0x2c, 7, ...integer(1), 1]))),
+        /dynamic assignment is not supported/,
     );
 });
