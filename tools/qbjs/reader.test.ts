@@ -522,6 +522,101 @@ test("accepts jump targets at endif and following EOL boundaries, rejecting payl
     assert.throws(() => readIR(module(script("a", conditional(integer(1), yes, [])))), /unsupported condition/);
     assert.throws(() => readIR(Uint8Array.from([...word(0xb075ef6f), 0])), /precompiled QB images/);
 });
+test("switch exits land on the endswitch or its EOL token, never a numbered-line payload", () => {
+    // One case: 3c selector 01 | 3e 49 <case jump> label 01 | body | 49 <exit> |
+    // <tail>, where tail starts with the 0x3d endswitch. Both jump deltas are
+    // patched relative to their own bytes: the case jump targets the 0x3d
+    // boundary, the exit jump a chosen offset from the 0x3d byte.
+    const switchWithExit = (exitFromEnd: number, tail: number[]) => {
+        const b = [
+            0x3c,
+            ...field("x", param("p")),
+            1,
+            0x3e,
+            0x49,
+            0,
+            0,
+            ...integer(1),
+            1,
+            ...command("Body"),
+            0x49,
+            0,
+            0,
+            ...tail,
+        ];
+        // 0x3c + 12 selector bytes + EOL = the case's 3e at 14, 0x49 at 15,
+        // its 2-byte delta at 16; the body 0x49 at 30, its delta at 31.
+        const caseJump = 16,
+            exit = b.length - tail.length - 2,
+            end = b.length - tail.length;
+        b[caseJump] = (end - caseJump) & 255;
+        b[caseJump + 1] = (end - caseJump) >>> 8;
+        b[exit] = (end + exitFromEnd - exit) & 255;
+        b[exit + 1] = (end + exitFromEnd - exit) >>> 8;
+        return b;
+    };
+    // Ordinary EOL after the endswitch: the EOL token at end+1 is a valid
+    // landing point, equivalent to the endswitch itself.
+    let body = switchWithExit(1, [0x3d, 1]);
+    assert.equal(readIR(module(script("a", body))).definitions.length, 1);
+    body = switchWithExit(0, [0x3d, 1]);
+    assert.equal(readIR(module(script("a", body))).definitions.length, 1);
+    // Numbered EOL (0x02 + 4 payload bytes) after the endswitch: the EOL
+    // token at end+1 is valid, but none of the payload bytes is a boundary.
+    body = switchWithExit(1, [0x3d, 2, ...word(42)]);
+    assert.equal(readIR(module(script("a", body))).definitions.length, 1);
+    for (const delta of [2, 3, 4, 5, 6]) {
+        body = switchWithExit(delta, [0x3d, 2, ...word(42)]);
+        assert.throws(() => readIR(module(script("a", body))), /case exit does not target endswitch/);
+    }
+    // The default-case exit jump is validated the same way.
+    const switchWithDefault = (exitFromEnd: number, tail: number[]) => {
+        const b = [
+            0x3c,
+            ...field("x", param("p")),
+            1,
+            0x3e,
+            0x49,
+            0,
+            0,
+            ...integer(1),
+            1,
+            ...command("Body"),
+            0x49,
+            0,
+            0,
+            0x3f,
+            0x49,
+            0,
+            0,
+            ...command("Fallback"),
+            ...tail,
+        ];
+        // 3c(0) selector(1..12) EOL(13) 3e(14) 49(15) caseJump(16,17)
+        // label(18..22) EOL(23) body(24..29) exit49(30) caseExit(31,32)
+        // 3f(33) 49(34) defaultJump(35,36) fallback body(37..42, no exit
+        // jump after it) endswitch at end.
+        const caseJump = 16,
+            caseExit = 31,
+            defaultAt = 33,
+            defaultJump = 35,
+            end = b.length - tail.length;
+        b[caseJump] = (defaultAt - caseJump) & 255;
+        b[caseJump + 1] = (defaultAt - caseJump) >>> 8;
+        b[caseExit] = (end + exitFromEnd - caseExit) & 255;
+        b[caseExit + 1] = (end + exitFromEnd - caseExit) >>> 8;
+        b[defaultJump] = (end - defaultJump) & 255;
+        b[defaultJump + 1] = (end - defaultJump) >>> 8;
+        return b;
+    };
+    assert.equal(readIR(module(script("a", switchWithDefault(1, [0x3d, 1])))).definitions.length, 1);
+    for (const delta of [2, 3, 4, 5]) {
+        assert.throws(
+            () => readIR(module(script("a", switchWithDefault(delta, [0x3d, 2, ...word(42)])))),
+            /case exit does not target endswitch/,
+        );
+    }
+});
 test("CLI writes deterministic IR and preserves input, including same-path/hardlink rejection", () => {
     const dir = mkdtempSync(join(tmpdir(), "thug2-reader-"));
     try {

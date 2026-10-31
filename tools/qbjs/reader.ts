@@ -483,12 +483,13 @@ export function readIR(bytes: Uint8Array, source = "input.qb", limits: ReaderLim
                 }
                 const end = p;
                 if (byte() !== 0x3d) fail("expected endswitch (pre-case statements are unsupported)");
-                // The original compiler targets the end-of-line right after the
-                // endswitch (ResolveRandomJumps: 49 = +1 + delta from the jump
-                // byte); landing on that EOL is equivalent to landing on the
-                // endswitch itself, so accept both positions.
-                const after = b[end + 1] === 2 ? end + 5 : end + 1;
-                if (exits.some((destination) => destination !== end && destination !== after))
+                // The original compiler targets the end-of-line token right
+                // after the endswitch (ResolveRandomJumps: 49 = +1 + delta from
+                // the jump byte); landing on that EOL token is equivalent to
+                // landing on the endswitch itself. Only the EOL token position
+                // (end+1 for both ordinary and numbered EOL) is accepted —
+                // never a payload byte of a numbered line.
+                if (exits.some((destination) => destination !== end && destination !== end + 1))
                     fail("case exit does not target endswitch");
                 body.push({ kind: "switch", offset, fields, cases, ...(fallback === undefined ? {} : { fallback }) });
                 blockEnds = lines(stopAt);
