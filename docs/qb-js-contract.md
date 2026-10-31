@@ -3,10 +3,12 @@
 This is the interface and behavior contract for the optional QB-to-JavaScript
 prototype. Both the scalar format-1 path and the bounded format-2 path are
 implemented. Format 2 adds value helpers, globals, expressions, structured
-control flow and random values; the native bridge remains scalar-only.
+control flow and random values. The native bridge supports explicit owning
+rich transport alongside its scalar compatibility API.
 The supported and deferred subsets are stated below.
 
-The proposal is synchronized with source commit `0b48eb9`. Behavior references are
+The phase2 foundation incorporates upstream-proposal `94e5bc7`, based on source
+commit `32be90a`; see [integration status](qb-phase2-foundation.md). Behavior references are
 [struct.h](../src/game/script/struct.h),
 [struct.cpp](../src/game/script/struct.cpp),
 [parse.cpp](../src/game/script/parse.cpp),
@@ -27,7 +29,8 @@ The existing `qb.module({format:1, source, scripts})`, `qb.define(name, fn)`,
 generator signature `(args, root)`, `qb.call`, `qb.frame`, `qb.step`,
 `qb.merge`, `qb.assign`, `qb.fields`, `qb.get` and `qb.truth` retain their
 current signatures. Calls yield through `yield*`; C++ callbacks return
-`{condition, outputs, frames?}`. An unknown command fails explicitly.
+`{condition, outputs, frames?}`. A missing command returns false without outputs,
+matching ExecuteCommand; registered host exceptions fault the task.
 
 Current scalar `qb.get` does not implement included-global lookup. Current
 `qb.truth` rejects Name expressions because ExecuteCommand dispatches them.
@@ -337,9 +340,10 @@ stack is explicitly unsupported. Snapshot/input copies use their own bounded
 work allowance, without consuming task fuel. Runtime contexts identify the
 owning task, symbol lookup and original source site.
 
-The native `Value`/host/snapshot bridge remains scalar-only: rich values can
-execute inside JS, but crossing that boundary rejects them rather than flattening
-or dropping fields. Rich native transport, objects/events and RNG are later work.
+The native `Value` API remains scalar-only for format 1. Native format-2 starts
+reject early; use `bindRich/startRich/updateRich` with owning `RichValue` models.
+Tags 20/21 still reject recursively: callback-scoped live references and
+objects/events remain future work.
 
 `emitter-fixtures.ts` contains a test-only dispatcher with real `values.js`;
 it validates generator behavior, not the product scheduler or rich C++ bridge.
@@ -354,13 +358,14 @@ regressions must not be given the larger compatibility-suite bundle.
 a bundle for the separate
 `scripting/tests/format2_tests.cpp` driver, which checks format-2 scripts through
 the real C++ bridge (inputs, host outputs, frame waits, loop/switch results and
-faults). It also verifies that rich native snapshots are rejected and runs as
+faults). It verifies owning rich snapshots and recoverable task faults and runs as
 `qb-js-format2-bridge` in CTest. `qb-js-translator` discovers all scoped Node
 tests; `qb-js-quickjs` remains the scalar/native regression suite. Public CI
-runs all four suites without game assets.
+runs all public suites without game assets.
 
 The argument builder omits missing values before passing fields into merge;
-an absent expression operand errors. A separate example of typed identity:
+an absent expression operand propagates an empty value (false in conditions).
+A separate example of typed identity:
 `copy(structureValue,"value",ctx)` makes a new container; reference-mode copying
 points at the original. Appending a new field through that live target is seen
 through all references, but not by the previous deep copy.
@@ -478,13 +483,13 @@ parameter reads and owning Structure expression results.
 
 ## C++ boundary and limits
 
-The existing `thug2::js::Value {type,bits}` transport remains **scalar only**.
-Do not pack JS object identities or byte buffers into `bits` or change that C++
-layout in this prototype. Rich JS values stay within QuickJS until a separate
-transport change defines containers, references, ownership,
-resource accounting and failure cleanup on both sides. Rich values reaching the
-current host boundary must error. Runtime snapshots currently have that same
-scalar-only limit; an end-to-end rich-value task requires explicit bridge work.
+`thug2::js::Value {type,bits}` retains its scalar layout. `RichValue`,
+`RichParameters`, `RichHostResult` and `RichSnapshot` provide explicit owning
+transport for strings, coordinates, structures and arrays. Format-2 callers must
+use the rich API. Tags 20/21 are rejected, not silently copied. Saved models
+outlive Runtime destruction and contain no JSValue handles. Rich transport caps
+aggregate payload at 4 MiB, field lists at 4096 and arrays/strings at 250,000.
+See [runtime API and failure policy](../scripting/README.md).
 
 Contexts enforce depth 128 and at most 250,000 visited value nodes per operation,
 with shared task/load work accounting and cycle guards. Parameter lists keep
@@ -512,3 +517,15 @@ Frame waits and ordinary calls remain regressions throughout. Object
 handles, member/event dispatch, interrupts, spawned-script traversal and renderer
 integration require later contracts and tests. A missing capability is reported,
 not replaced with a success stub.
+
+## Phase2 foundation update
+
+Runtime embeds numeric/RNG/value/scheduler helpers once, using quickjs-ng v0.17.0.
+Gameplay numeric arithmetic defaults to precision 24 (FPCW 0x007f); explicit
+53/64 profiles are offline analysis tools. Fuel is replenished per distinct
+update. Execution interrupts abort only the affected task; uncaught engine OOM,
+stack overflow and native allocation failures during execution are terminal.
+Only gameframe/gameframes/game waits count updates; frame/frames timed waits
+reject. Missing expression operands produce empty values, and QScript identity
+comparisons do not execute scripts. The shared field helper is linear and has a
+literal-vector marker, but generated modules await the #42 emitter adapter.

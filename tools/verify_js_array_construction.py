@@ -462,12 +462,13 @@ def run_verification(exe_bytes: bytes, root: Path, quickjs_runner: Path | None) 
 
     quickjs_verified = False
     if quickjs_runner is not None:
+        numeric_js = (root / "scripting/numeric.js").read_text(encoding="utf-8")
         random_js = (root / "scripting/random.js").read_text(encoding="utf-8")
         values_js = (root / "scripting/values.js").read_text(encoding="utf-8")
         qjs_script = (
-            random_js
-            + "\n"
-            + values_js
+            "if (globalThis.qbNumeric === undefined) {\n" + numeric_js + "\n}\n"
+            + "if (globalThis.qbRandom === undefined) {\n" + random_js + "\n}\n"
+            + "if (globalThis.qbValues === undefined) {\n" + values_js + "\n}\n"
             + "\n(() => {\n"
             + f"const dataset = {json.dumps(dataset['cases'])};\n"
             + """

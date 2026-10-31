@@ -5,7 +5,7 @@
 InitialRand (0x00403DA0), Rnd (0x00403DE0), Rnd2 (0x00403E30),
 ResolveRandomJumps (0x00470C60), CStoredRandom::Shuffle (0x0046F8A0) and
 ParseRandomRange (0x0046FBD0) execute unchanged from a local THUG2PM.exe in
-Unicorn with x87 FPCW 0x037f. Stored-record lookup/allocation are controlled
+Unicorn with x87 FPCW 0x007f. Stored-record lookup/allocation are controlled
 stubs for one table/owner at a time. Finite range endpoints and non-negative
 weights only; no game data or report is committed.
 """
@@ -90,7 +90,7 @@ def main() -> None:
 
     exe_bytes = args.exe.read_bytes()
     assert hashlib.sha256(exe_bytes).hexdigest() == EXE_SHA256, "Unexpected THUG2PM.exe SHA-256"
-    random_source = args.random_js.read_text(encoding="utf-8")
+    random_source = (root / "scripting/numeric.js").read_text(encoding="utf-8") + "\n" + args.random_js.read_text(encoding="utf-8")
 
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     pe = pefile.PE(data=exe_bytes)
@@ -104,7 +104,7 @@ def main() -> None:
     uc.mem_map(component, 0x1000)
     uc.mem_map(stack, 0x2000)
     uc.mem_map(stop, 0x1000)
-    uc.reg_write(UC_X86_REG_FPCW, 0x037F)
+    uc.reg_write(UC_X86_REG_FPCW, 0x007F)
 
     def put(addr: int, val: int) -> None:
         uc.mem_write(addr, struct.pack("<I", val & 0xFFFFFFFF))
@@ -286,9 +286,7 @@ def main() -> None:
 
         def run_qjs(body: str) -> None:
             bundle = (
-                random_source
-                + "\n"
-                + body
+                body
                 + "\nglobalThis.qbIntegrationTestResult = { completed: true };\n"
                 + fixtures_source
             )
